@@ -1,12 +1,15 @@
 """
 Sawtooth-Memory — Async context manager middleware for LLM agents.
 
-MVP: two-tier memory (L0 system prompt + L1 working memory) with
-naive truncation when the token soft limit is exceeded.
+Solves the "Lost in the Middle" problem by dynamically compressing
+context windows via local Ollama models on a background asyncio thread.
 
 Public API:
     ContextManager       — Main middleware class
-    ContextManagerConfig — Configuration (token limits)
+    ContextManagerConfig — Configuration (token limits, Ollama settings)
+    OllamaConfig         — Ollama-specific connection settings
+    MemoryState          — The four-tier state object (read access)
+    SawtoothError        — Base exception
 
 Example:
     from sawtooth_memory import ContextManager, ContextManagerConfig
@@ -16,17 +19,29 @@ Example:
     async with ContextManager("You are a helpful agent.", config) as cm:
         await cm.add_message("user", "What is 2 + 2?")
         messages = cm.build_prompt()
-        # Pass `messages` to your LLM SDK
 """
 
-from .config import ContextManagerConfig
+from .config import ContextManagerConfig, OllamaConfig
+from .exceptions import (
+    CompressionError,
+    MalformedOutputError,
+    OllamaConnectionError,
+    SawtoothError,
+    TokenLimitExceededError,
+)
 from .middleware import ContextManager
 from .state import MemoryState
 
 __all__ = [
     "ContextManager",
     "ContextManagerConfig",
+    "OllamaConfig",
     "MemoryState",
+    "SawtoothError",
+    "CompressionError",
+    "OllamaConnectionError",
+    "MalformedOutputError",
+    "TokenLimitExceededError",
 ]
 
 __version__ = "0.1.0"
