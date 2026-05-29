@@ -412,6 +412,8 @@ config = ContextManagerConfig(
 
 ---
 
+# Repository Structure
+
 ```text
 sawtooth-memory/
 ├── .github/
