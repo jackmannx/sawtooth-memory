@@ -409,8 +409,6 @@ config = ContextManagerConfig(
 )
 ```
 
-````
-
 ### Cloud Backend (OpenAI, Anthropic, Gemini)
 
 To offload background compression tasks to a cloud API provider, configure a `CloudConfig` block instead. This mode utilizes native structured outputs and built-in exponential backoff for HTTP 429 rate limits.
@@ -449,6 +447,8 @@ config = ContextManagerConfig(
 | `fallback_truncate` | `bool`         | `True`     | If `True`, falls back to tracking-truncation strings when compression fails, ensuring continuity. |
 | `ollama`            | `OllamaConfig` | _Factory_  | Active backend properties dedicated to your local Ollama runtime loop.                            |
 | `cloud`             | `CloudConfig`  | `None`     | Active properties dedicated to Cloud API orchestration rules.                                     |
+
+```
 
 ```
 
@@ -524,4 +524,7 @@ ruff check .
 # License
 
 MIT
-````
+
+```
+
+```
