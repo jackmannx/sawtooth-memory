@@ -24,7 +24,7 @@ from __future__ import annotations
 import logging
 
 from .config import ContextManagerConfig
-from .compressor import OllamaCompressor, CloudCompressor
+from .compressor import CloudCompressor, OllamaCompressor
 from .exceptions import TokenLimitExceededError
 from .monitor import TokenMonitor
 from .state import (
@@ -49,7 +49,7 @@ class ContextManager:
     - Maintains the four-tier memory state (L0 / L1 / L1.5 / L2).
     - Counts tokens locally via tiktoken (no API call needed).
     - When L1 exceeds the soft limit, slices the oldest chunk and queues
-      it for async compression via a background Ollama worker.
+      it for async compression via a background Ollama or Cloud worker.
     - When L1 exceeds the hard limit, falls back to synchronous truncation
       or raises TokenLimitExceededError (configurable).
     - Compiles all tiers into a structured prompt via build_prompt().
@@ -70,19 +70,25 @@ class ContextManager:
         system_prompt: str,
         config: ContextManagerConfig | None = None,
     ) -> None:
-        # 1. Assign the config FIRST
+        # 1. Assign configuration first to prevent AttributeError
         self._config = config or ContextManagerConfig()
-        
-        # 2. Assign the state
-        self._state = MemoryState(
-            l0_system=SystemPrompt(content=system_prompt)
-        )
-        self._tokenizer = tiktoken.encoding_for_model(
-            self._config.tokenizer_model
-        )
-        self._state.l0_system.token_count = self._count_tokens(system_prompt)
 
-        # 3. NOW evaluate the cloud routing logic
+        self._monitor = TokenMonitor(
+            model=self._config.tokenizer_model,
+            soft_limit=self._config.soft_limit_tokens,
+            hard_limit=self._config.hard_limit_tokens,
+        )
+
+        sp_tokens = self._monitor.count_text(system_prompt)
+        # 2. Initialize memory state
+        self._state = MemoryState(
+            l0_system=SystemPrompt(content=system_prompt, token_count=sp_tokens),
+            l1_working=WorkingMemory(),
+            l1_5_entities=EntityLedger(),
+            l2_archival=ArchivalMemory(),
+        )
+
+        # 3. Dynamic Compressor Routing
         if self._config.cloud:
             self._compressor = CloudCompressor(self._config.cloud)
         else:
@@ -91,6 +97,13 @@ class ContextManager:
         self._worker = CompressionWorker(
             compressor=self._compressor,
             fallback_truncate=self._config.fallback_truncate,
+        )
+
+        logger.debug(
+            f"ContextManager initialised. "
+            f"soft_limit={self._config.soft_limit_tokens}, "
+            f"hard_limit={self._config.hard_limit_tokens}, "
+            f"chunk_size={self._config.chunk_size}"
         )
 
     # ------------------------------------------------------------------
@@ -219,7 +232,7 @@ class ContextManager:
     def _force_truncate(self) -> None:
         """
         Hard-limit fallback: discard the oldest messages immediately on
-        the main thread without waiting for Ollama.
+        the main thread without waiting for Ollama/Cloud.
         """
         chunk = self._state.l1_working.slice_oldest(self._config.chunk_size)
         note = (
