@@ -15,8 +15,8 @@ import re
 
 import httpx
 
-from .config import OllamaConfig
-from .exceptions import CompressionError, OllamaConnectionError
+from sawtooth_memory.config import OllamaConfig
+from sawtooth_memory.exceptions import CompressionError, OllamaConnectionError
 
 logger = logging.getLogger(__name__)
 
@@ -192,3 +192,186 @@ class OllamaCompressor:
         entities = {str(k): str(v) for k, v in entities.items()}
 
         return {"narrative_summary": narrative, "extracted_entities": entities}
+
+
+# ---------------------------------------------------------------------------
+# Cloud compressor
+# ---------------------------------------------------------------------------
+
+import asyncio
+
+import httpx
+from tenacity import (
+    retry,
+    retry_if_exception,
+    stop_after_attempt,
+    wait_exponential,
+)
+
+from sawtooth_memory.config import CloudConfig
+from sawtooth_memory.providers import ProviderAdapter, get_adapter
+
+
+def _is_rate_limit(exc: BaseException) -> bool:
+    """Tenacity predicate — retry on HTTP 429 only."""
+    return (
+        isinstance(exc, httpx.HTTPStatusError)
+        and exc.response.status_code == 429
+    )
+
+
+class CloudCompressor:
+    """
+    Async compression engine backed by a cloud LLM provider
+    (OpenAI, Anthropic, or Gemini).
+
+    Implements the same ``compress(messages_text) → dict`` interface as
+    ``OllamaCompressor`` so it can be dropped in as a replacement backend.
+
+    Return value::
+
+        {
+            "narrative_summary":   str,
+            "extracted_entities":  dict[str, str],
+            "total_tokens":        int,
+        }
+
+    Retry policy
+    ------------
+    HTTP 429 (rate-limit) responses are retried up to 5 times with
+    exponential back-off (2 s → 4 s → 8 s → 16 s → 32 s) via tenacity.
+
+    Proxy support
+    -------------
+    Set ``CloudConfig.base_url`` to route traffic through Helicone,
+    LiteLLM, Azure OpenAI, or any other OpenAI-compatible gateway.
+    """
+
+    def __init__(self, config: CloudConfig) -> None:
+        self._config = config
+        self._adapter: ProviderAdapter = get_adapter(config)
+        self._client: httpx.AsyncClient | None = None
+
+    async def _get_client(self) -> httpx.AsyncClient:
+        if self._client is None or self._client.is_closed:
+            self._client = httpx.AsyncClient(
+                timeout=self._config.timeout_seconds,
+            )
+        return self._client
+
+    async def close(self) -> None:
+        if self._client and not self._client.is_closed:
+            await self._client.aclose()
+            logger.debug("CloudCompressor: HTTP client closed.")
+
+    # ------------------------------------------------------------------
+    # Public interface
+    # ------------------------------------------------------------------
+
+    async def compress(self, messages_text: str) -> dict:
+        """
+        Prune, send to the cloud provider, and return a normalised result.
+
+        Returns:
+            {
+                "narrative_summary":   str,
+                "extracted_entities":  dict[str, str],
+                "total_tokens":        int,
+            }
+
+        Raises:
+            CompressionError: on HTTP errors, timeouts, or JSON parse failures.
+        """
+        pruned = _prune(messages_text)
+        logger.debug(
+            f"CloudCompressor: pruned {len(messages_text)} → {len(pruned)} chars"
+        )
+
+        content = f"Compress the following context logs:\n\n{pruned}"
+        payload = self._adapter.build_payload(
+            model=self._config.model,
+            system_prompt=_SYSTEM_PROMPT,
+            content=content,
+        )
+        headers = self._adapter.build_headers(
+            self._config.api_key.get_secret_value()
+        )
+
+        response_data = await self._post_with_retry(
+            url=self._adapter.endpoint,
+            headers=headers,
+            payload=payload,
+        )
+
+        parsed, total_tokens = self._adapter.parse_response(response_data)
+        return self._normalise(parsed, total_tokens)
+
+    # ------------------------------------------------------------------
+    # HTTP execution with tenacity retry
+    # ------------------------------------------------------------------
+
+    async def _post_with_retry(
+        self, url: str, headers: dict, payload: dict
+    ) -> dict:
+        """
+        Execute an httpx POST with exponential back-off on HTTP 429.
+
+        Tenacity cannot decorate async methods directly when they are
+        instance methods (the ``self`` reference complicates pickling),
+        so we use a local closure instead.
+        """
+        @retry(
+            retry=retry_if_exception(_is_rate_limit),
+            wait=wait_exponential(multiplier=1, min=2, max=32),
+            stop=stop_after_attempt(5),
+            reraise=True,
+        )
+        async def _attempt() -> dict:
+            client = await self._get_client()
+            try:
+                resp = await client.post(url, json=payload, headers=headers)
+                resp.raise_for_status()
+            except httpx.ConnectError as exc:
+                raise CompressionError(
+                    f"CloudCompressor: cannot reach {url}. Check your network "
+                    "or CloudConfig.base_url."
+                ) from exc
+            except httpx.TimeoutException as exc:
+                raise CompressionError(
+                    f"CloudCompressor: request timed out after "
+                    f"{self._config.timeout_seconds}s."
+                ) from exc
+            except httpx.HTTPStatusError as exc:
+                status = exc.response.status_code
+                if status == 429:
+                    # Let tenacity handle the retry.
+                    raise
+                raise CompressionError(
+                    f"CloudCompressor: provider returned HTTP {status}: "
+                    f"{exc.response.text[:400]}"
+                ) from exc
+            return resp.json()
+
+        return await _attempt()
+
+    # ------------------------------------------------------------------
+    # Output normalisation
+    # ------------------------------------------------------------------
+
+    def _normalise(self, parsed: dict, total_tokens: int) -> dict:
+        """
+        Coerce parsed JSON into the canonical return shape, mirroring
+        the OllamaCompressor contract plus a ``total_tokens`` field.
+        """
+        narrative = parsed.get("narrative_summary", "")
+        entities = parsed.get("extracted_entities", {})
+
+        if not isinstance(entities, dict):
+            entities = {}
+        entities = {str(k): str(v) for k, v in entities.items()}
+
+        return {
+            "narrative_summary": narrative,
+            "extracted_entities": entities,
+            "total_tokens": total_tokens,
+        }
