@@ -1,5 +1,10 @@
 # Sawtooth Memory
 
+[![Automated Test Suite](https://github.com/HtooTayZa/sawtooth-memory/actions/workflows/test.yaml/badge.svg)](https://github.com/HtooTayZa/sawtooth-memory/actions/workflows/test.yaml)
+[![PyPI version](https://badge.fury.io/py/sawtooth-memory.svg)](https://badge.fury.io/py/sawtooth-memory)
+[![Python Support](https://img.shields.io/pypi/pyversions/sawtooth-memory.svg)](https://pypi.org/project/sawtooth-memory/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 Async hierarchical memory middleware for LLM agents.
 
 Sawtooth Memory mitigates context-window degradation by continuously compressing older conversation state into structured long-term memory — without blocking the agent execution loop.
@@ -185,9 +190,17 @@ All summarization can run entirely on local Ollama models.
 
 # Installation
 
+Install the core package from PyPI:
 ```bash
-pip install sawtooth-memory (coming soon)
+pip install sawtooth-memory
+
 ```
+Optional LangGraph support:
+
+```bash
+pip install "sawtooth-memory[langgraph]"
+```
+
 
 From source:
 
@@ -197,11 +210,6 @@ cd sawtooth-memory
 pip install -e ".[dev]"
 ```
 
-Optional LangGraph support:
-
-```bash
-pip install -e ".[langgraph]"
-```
 
 Requirements:
 
@@ -213,6 +221,12 @@ ollama serve
 ollama pull phi4
 ```
 
+
+# Examples
+
+You can find complete, runnable implementations in the [`/examples`](https://github.com/HtooTayZa/sawtooth-memory/tree/main/examples) directory of the repository:
+* `basic_agent.py` — Standalone usage of the ContextManager and L1.5 state inspection.
+* `langgraph_integration.py` — Wiring the Sawtooth LangGraph adapter into a StateGraph node.
 ---
 
 # Quick Start
