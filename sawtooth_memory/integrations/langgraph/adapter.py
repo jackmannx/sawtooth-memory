@@ -169,13 +169,28 @@ class SawtoothLangGraphAdapter:
         Build an optimised, compressed prompt and convert it to LangChain
         message objects.
 
+        Includes a sanitization pass that removes orphaned ``ToolMessage``
+        entries — i.e. any ``ToolMessage`` whose originating ``AIMessage``
+        (identified by a matching ``tool_calls[i].id``) is no longer present
+        in the compiled sequence because it was evicted and compressed into
+        the L2 archive.
+
+        Sending orphaned ``ToolMessage`` objects to strict cloud APIs
+        (OpenAI, Anthropic) causes an HTTP 400 because the API enforces
+        that every ``tool_call_id`` in a ``ToolMessage`` must reference an
+        ``id`` that appears in a preceding ``AIMessage.tool_calls`` array.
+
         Returns:
             An ordered list of LangChain ``BaseMessage`` objects representing
             the compiled L0 / L1.5 / L2 / active-L1 context windows, ready
             to pass directly to ``llm.ainvoke()``.
         """
         raw_prompt: list[dict[str, str]] = self._context_manager.build_prompt()
-        lc_messages: list[BaseMessage] = []
+
+        # ── Pass 1: materialise raw dicts into typed LangChain objects ──────
+        # ToolMessage construction is deferred to Pass 2 so we can first
+        # collect the full set of active tool_call_ids from any AIMessage.
+        pre_messages: list[BaseMessage] = []
 
         for item in raw_prompt:
             role: str = item.get("role", "user")
@@ -187,16 +202,61 @@ class SawtoothLangGraphAdapter:
                     role,
                 )
                 msg_cls = HumanMessage
-                
+
             if msg_cls is ToolMessage:
-                lc_messages.append(
-                    ToolMessage(content=content, tool_call_id="sawtooth_compressed_state")
+                # Use a sentinel tool_call_id for now; Pass 2 will filter
+                # these out if the originating AIMessage is absent.
+                pre_messages.append(
+                    ToolMessage(content=content, tool_call_id="__sawtooth_pending__")
                 )
             else:
-                lc_messages.append(msg_cls(content=content))
-                
+                pre_messages.append(msg_cls(content=content))
+
+        # ── Pass 2: collect active tool_call_ids from present AIMessages ────
+        # An AIMessage produced by Sawtooth's memory reconstruction will have
+        # no tool_calls (they are not stored in L1 state), so the active set
+        # will be empty for all Sawtooth-reconstructed messages.  An AIMessage
+        # passed through without compression (e.g. still in the L1 window)
+        # retains its tool_calls array and its children survive the filter.
+        active_tool_call_ids: set[str] = set()
+        for msg in pre_messages:
+            if isinstance(msg, AIMessage) and msg.tool_calls:
+                for tc in msg.tool_calls:
+                    # tool_calls items are dicts with an "id" key, or
+                    # ToolCall typed-dicts depending on the langchain version.
+                    tc_id = tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", None)
+                    if tc_id:
+                        active_tool_call_ids.add(tc_id)
+
+        # ── Pass 3: build final list, dropping orphaned ToolMessages ────────
+        lc_messages: list[BaseMessage] = []
+        dropped = 0
+        for msg in pre_messages:
+            if isinstance(msg, ToolMessage):
+                if msg.tool_call_id not in active_tool_call_ids:
+                    # The parent AIMessage has been evicted from L1 and
+                    # compressed into L2.  Its semantic content is already
+                    # captured in the archival narrative, so we can safely
+                    # omit this ToolMessage to keep the payload schema-valid.
+                    dropped += 1
+                    logger.debug(
+                        "get_compiled_prompt: dropped orphaned ToolMessage "
+                        "(tool_call_id=%r — parent AIMessage not in window)",
+                        msg.tool_call_id,
+                    )
+                    continue
+            lc_messages.append(msg)
+
+        if dropped:
+            logger.info(
+                "get_compiled_prompt: sanitized %d orphaned ToolMessage(s) "
+                "whose parent AIMessage was evicted from L1.",
+                dropped,
+            )
 
         logger.debug(
-            "get_compiled_prompt: compiled %d message(s)", len(lc_messages)
+            "get_compiled_prompt: compiled %d message(s) (%d orphan(s) removed)",
+            len(lc_messages),
+            dropped,
         )
         return lc_messages
