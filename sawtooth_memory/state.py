@@ -6,12 +6,18 @@ Tiers:
   L1  — WorkingMemory    : Mutable. Last N raw messages.
   L1.5— EntityLedger     : KV store. Exact deterministic values (IDs, paths, etc).
   L2  — ArchivalMemory   : Append-only. Dense narrative of compressed history.
+
+Event integration:
+  EntityLedger can be given an optional event callback that is invoked whenever
+  an entity is inserted or updated. The callback receives (key, value, operation)
+  where operation is "insert" or "update". This allows higher layers to emit
+  telemetry without coupling the state module to the event system.
 """
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Literal
+from typing import Callable, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -23,9 +29,7 @@ class Message(BaseModel):
 
     role: MessageRole
     content: str
-    timestamp: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc)
-    )
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     token_count: int = 0
 
     def to_openai_dict(self) -> dict[str, str]:
@@ -84,20 +88,45 @@ class EntityLedger(BaseModel):
     To prevent unbounded growth during very long sessions, each key retains
     at most ``max_history_per_key`` values (default 10).  When the list is
     full the oldest entry is evicted before the new value is appended.
+
+    Event callback (Phase 2)
+    ------------------------
+    An optional callback can be set via ``set_event_callback()``. It will be
+    invoked whenever an entity is inserted (new key) or updated (new value
+    appended to an existing key). The callback signature is:
+        callback(key: str, value: str, operation: Literal["insert", "update"])
+    This allows higher layers (e.g., CompressionWorker) to emit telemetry events
+    without coupling the state module to the event system.
     """
 
     entities: dict[str, list[str]] = Field(default_factory=dict)
     max_history_per_key: int = Field(default=10, exclude=True)
+    _event_callback: Optional[
+        Callable[[str, str, Literal["insert", "update"]], None]
+    ] = Field(default=None, exclude=True)
+
+    def set_event_callback(
+        self,
+        callback: Optional[Callable[[str, str, Literal["insert", "update"]], None]],
+    ) -> None:
+        """
+        Set a callback that will be invoked whenever an entity is inserted or updated.
+
+        Args:
+            callback: Callable with signature (key, value, operation) or None to disable.
+        """
+        self._event_callback = callback
 
     def upsert(self, new_entities: dict[str, str]) -> None:
         """Merge *new_entities* into the ledger with conflict preservation.
 
         For every key in *new_entities*:
-        - If the key is new, create a single-element list.
+        - If the key is new, create a single-element list and invoke the
+          event callback with operation "insert".
         - If the key already exists and the incoming value differs from the
           most-recently stored value, append the new value (up to
           ``max_history_per_key`` unique entries, evicting the oldest when
-          the window is full).
+          the window is full). Invoke the event callback with operation "update".
         - If the incoming value is identical to the current latest value,
           the call is a no-op for that key (avoids duplicating identical
           extractions from overlapping compression waves).
@@ -105,16 +134,22 @@ class EntityLedger(BaseModel):
         for key, value in new_entities.items():
             value = str(value)
             if key not in self.entities:
+                # New key → insert
                 self.entities[key] = [value]
+                if self._event_callback:
+                    self._event_callback(key, value, "insert")
             else:
                 history = self.entities[key]
                 # Skip exact duplicate of the most-recent value.
                 if history and history[-1] == value:
                     continue
+                # Existing key gets a new value → update
                 history.append(value)
                 # Enforce the rolling window: evict the oldest entry.
                 if len(history) > self.max_history_per_key:
-                    self.entities[key] = history[-self.max_history_per_key:]
+                    self.entities[key] = history[-self.max_history_per_key :]
+                if self._event_callback:
+                    self._event_callback(key, value, "update")
 
     def get_latest(self, key: str) -> str | None:
         """Return the most-recently extracted value for *key*, or ``None``."""
@@ -158,9 +193,7 @@ class ArchivalMemory(BaseModel):
     def append_narrative(self, new_text: str) -> None:
         if not new_text.strip():
             return
-        self.narrative = (
-            f"{self.narrative}\n{new_text}" if self.narrative else new_text
-        )
+        self.narrative = f"{self.narrative}\n{new_text}" if self.narrative else new_text
 
 
 class MemoryState(BaseModel):
