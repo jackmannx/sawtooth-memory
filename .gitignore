@@ -2,4 +2,3 @@
 __pycache__/
 *.py[cod]
 dist
-sawtooth_compression_journal.jsonl
