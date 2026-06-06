@@ -85,7 +85,7 @@ By moving compression to the background, Sawtooth achieves massive latency reduc
 | **Final Prompt Payload** | 506 tokens | **454 tokens** | **10% Lower Token Cost** |
 | **UUID / Fact Recall** | Variable / Hallucinates | **100% Retained** | **Guaranteed via L1.5 Ledger** |
 
-For full methodology, cloud comparisons, and reproducibility steps, view our [Comprehensive Benchmarks](https://www.google.com/search?q=BENCHMARKS.md).
+For full methodology, cloud comparisons, and reproducibility steps, view our [Read the Performance Benchmarks](BENCHMARKS.md).
 
 ---
 
