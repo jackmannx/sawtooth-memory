@@ -5,8 +5,7 @@ config.py — Configuration models for Sawtooth-Memory.
 from __future__ import annotations
 
 from enum import Enum
-from typing import Optional
-
+from typing import Any, Optional
 from pydantic import BaseModel, Field, SecretStr, model_validator
 
 # ---------------------------------------------------------------------------
@@ -110,6 +109,14 @@ class ContextManagerConfig(BaseModel):
     custom_ner_patterns: dict[str, str] = Field(
         default_factory=dict,
         description="User-defined key-to-regex-string mappings that extend or override default tracking.",
+    )
+    storage_adapter: Optional[Any] = Field(
+        default=None,
+        description="Pass an instance of a BaseStorageAdapter (like RedisStorageAdapter) for distributed state.",
+    )
+    session_id: str = Field(
+        default="local_default",
+        description="Unique identifier for the user session when using distributed storage.",
     )
 
     ollama: Optional[OllamaConfig] = None
