@@ -35,6 +35,11 @@ dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
     "pytest-mock>=3.12",
+    "asyncpg>=0.29",
+]
+
+postgres = [
+    "asyncpg>=0.29",
 ]
 
 langgraph = [

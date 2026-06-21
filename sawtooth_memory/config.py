@@ -112,7 +112,10 @@ class ContextManagerConfig(BaseModel):
     )
     storage_adapter: Optional[Any] = Field(
         default=None,
-        description="Pass an instance of a BaseStorageAdapter (like RedisStorageAdapter) for distributed state.",
+        description=(
+            "Pass an instance of a BaseStorageAdapter "
+            "(e.g. RedisStorageAdapter or PostgresStorageAdapter) for distributed state."
+        ),
     )
     session_id: str = Field(
         default="local_default",
