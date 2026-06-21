@@ -121,6 +121,10 @@ class ContextManagerConfig(BaseModel):
         default="local_default",
         description="Unique identifier for the user session when using distributed storage.",
     )
+    pool_id: Optional[str] = Field(
+        default=None,
+        description="Namespace mapping for multi-agent pool synchronization.",
+    )
 
     ollama: Optional[OllamaConfig] = None
     cloud: Optional[CloudConfig] = None

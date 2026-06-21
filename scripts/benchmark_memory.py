@@ -229,7 +229,7 @@ async def run_sawtooth_benchmark(conversation: List[Dict[str, str]]) -> dict:
         print("  [Sawtooth] Draining background compression worker pipeline safely...")
         await cm.stop()
 
-        final_prompt = cm.build_prompt()
+        final_prompt = await cm.build_prompt()
         prompt_string = "\n".join([m["content"] for m in final_prompt])
 
         monitor = TokenMonitor(model="gpt-4o")

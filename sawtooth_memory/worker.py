@@ -18,12 +18,12 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
-from typing import Union, Optional, Any, Dict
+from typing import Any, Dict, Optional, Union
 
 from .ner import NERPipeline, active_strategy_context
 from .compressor import OllamaCompressor, CloudCompressor
 from .exceptions import CompressionError, OllamaConnectionError
-from .state import MemoryState, Message
+from .state import ArchivalMemory, EntityLedger, MemoryState, Message
 
 from .events.bus import EventBus
 from .events.types import (
@@ -76,11 +76,17 @@ class CompressionWorker:
         journal: Optional[AsyncCompressionJournal] = None,
         enable_deterministic_ner: bool = True,  # NEW
         custom_ner_patterns: Optional[dict] = None,  # NEW
+        storage_adapter: Optional[Any] = None,
+        pool_id: Optional[str] = None,
+        session_id: Optional[str] = None,
     ) -> None:
         self._compressor = compressor
         self._fallback_truncate = fallback_truncate
         self._event_bus = event_bus
         self._journal = journal
+        self._storage_adapter = storage_adapter
+        self._pool_id = pool_id
+        self._session_id = session_id or "unknown_agent"
         self._queue: asyncio.Queue[CompressionTask | None] = asyncio.Queue()
         self._task: asyncio.Task | None = None
         self._running: bool = False
@@ -206,6 +212,15 @@ class CompressionWorker:
             finally:
                 active_strategy_context.reset(token)
 
+            try:
+                await self._sync_pool_state(combined_entities, narrative)
+            except Exception as exc:
+                logger.warning(
+                    "CompressionWorker: failed to sync pool state (%s).",
+                    exc,
+                    exc_info=True,
+                )
+
             # 6. Emit existing L2SummaryGeneratedEvent and CompressionCycleCompleteEvent
             if self._event_bus:
                 asyncio.create_task(
@@ -311,6 +326,34 @@ class CompressionWorker:
         )
         state.l2_archival.append_narrative(note)
         logger.warning("CompressionWorker: fallback truncation note written to L2.")
+
+    async def _sync_pool_state(
+        self, entities_delta: dict[str, str], narrative_delta: str
+    ) -> None:
+        """
+        Persist shared L1.5/L2 state for multi-agent pools after compression.
+        """
+        adapter = self._storage_adapter
+        pool_id = self._pool_id
+        if not adapter or not pool_id:
+            return
+
+        pool_state = await adapter.load_pool_state(pool_id)
+        if pool_state is None:
+            shared_entities = EntityLedger()
+            shared_archive = ArchivalMemory()
+        else:
+            shared_entities, shared_archive = pool_state
+
+        if entities_delta:
+            shared_entities.upsert(entities_delta)
+
+        if narrative_delta.strip():
+            shared_archive.append_narrative(
+                f"[origin:{self._session_id}] {narrative_delta.strip()}"
+            )
+
+        await adapter.save_pool_state(pool_id, shared_entities, shared_archive)
 
     # ------------------------------------------------------------------
     # Helpers

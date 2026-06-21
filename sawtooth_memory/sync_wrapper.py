@@ -108,9 +108,7 @@ class SawtoothSyncWrapper:
             )
 
         async def _safe_build() -> List[Dict[str, str]]:
-            return (
-                cm.build_prompt()
-            )  # cm is strictly typed here, no Optional/None warnings
+            return await cm.build_prompt()
 
         return portal.call(_safe_build)
 

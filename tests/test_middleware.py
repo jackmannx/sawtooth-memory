@@ -1,12 +1,10 @@
 """tests/test_middleware.py — Integration tests for ContextManager."""
 
-import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
 from sawtooth_memory.config import ContextManagerConfig, OllamaConfig
-from sawtooth_memory.exceptions import TokenLimitExceededError
 from sawtooth_memory.middleware import ContextManager
 
 
@@ -74,9 +72,7 @@ class TestAddMessage:
 
     @pytest.mark.asyncio
     async def test_messages_sliced_on_compression(self, config):
-        with patch(
-            "sawtooth_memory.middleware.CompressionWorker.enqueue"
-        ) as mock_enqueue:
+        with patch("sawtooth_memory.middleware.CompressionWorker.enqueue"):
             async with ContextManager("Sys.", config) as cm:
                 for i in range(20):
                     await cm.add_message("user", f"Message number {i} goes here")
@@ -88,7 +84,7 @@ class TestBuildPrompt:
     @pytest.mark.asyncio
     async def test_system_block_always_present(self, config):
         async with ContextManager("You are a robot.", config) as cm:
-            prompt = cm.build_prompt()
+            prompt = await cm.build_prompt()
             assert prompt[0]["role"] == "system"
             assert "[SYSTEM_L0]" in prompt[0]["content"]
             assert "You are a robot." in prompt[0]["content"]
@@ -98,7 +94,7 @@ class TestBuildPrompt:
         async with ContextManager("Sys.", config) as cm:
             await cm.add_message("user", "Hi")
             await cm.add_message("assistant", "Hello!")
-            prompt = cm.build_prompt()
+            prompt = await cm.build_prompt()
             assert prompt[1]["role"] == "user"
             assert prompt[2]["role"] == "assistant"
 
@@ -106,28 +102,28 @@ class TestBuildPrompt:
     async def test_archive_injected_when_present(self, config):
         async with ContextManager("Sys.", config) as cm:
             cm.state.l2_archival.narrative = "Agent did a thing."
-            prompt = cm.build_prompt()
+            prompt = await cm.build_prompt()
             assert "[ARCHIVE_L2]" in prompt[0]["content"]
             assert "Agent did a thing." in prompt[0]["content"]
 
     @pytest.mark.asyncio
     async def test_entity_ledger_injected_when_present(self, config):
         async with ContextManager("Sys.", config) as cm:
-            cm.state.l1_5_entities.entities["conn_id"] = "abc-123"
-            prompt = cm.build_prompt()
+            cm.state.l1_5_entities.entities["conn_id"] = ["abc-123"]
+            prompt = await cm.build_prompt()
             assert "[ENTITY_LEDGER_L1_5]" in prompt[0]["content"]
             assert "conn_id" in prompt[0]["content"]
 
     @pytest.mark.asyncio
     async def test_empty_archive_not_injected(self, config):
         async with ContextManager("Sys.", config) as cm:
-            prompt = cm.build_prompt()
+            prompt = await cm.build_prompt()
             assert "[ARCHIVE_L2]" not in prompt[0]["content"]
 
     @pytest.mark.asyncio
     async def test_empty_entities_not_injected(self, config):
         async with ContextManager("Sys.", config) as cm:
-            prompt = cm.build_prompt()
+            prompt = await cm.build_prompt()
             assert "[ENTITY_LEDGER_L1_5]" not in prompt[0]["content"]
 
 
@@ -157,6 +153,7 @@ class TestRepr:
             assert "ContextManager" in r
             assert "l1=" in r
 
+
 class TestHealthCheck:
     @pytest.mark.asyncio
     async def test_health_check_passes_valid_config(self, config):
@@ -170,12 +167,9 @@ class TestHealthCheck:
     async def test_health_check_raises_on_invalid_limits(self):
         # Setup: Soft limit is dangerously higher than Hard limit
         bad_config = ContextManagerConfig(
-            soft_limit_tokens=500,
-            hard_limit_tokens=200,
-            chunk_size=3
+            soft_limit_tokens=500, hard_limit_tokens=200, chunk_size=3
         )
         cm = ContextManager("Sys.", bad_config)
-        
+
         with pytest.raises(ValueError, match="strictly less than hard_limit_tokens"):
             await cm.health_check()
-            

@@ -10,7 +10,7 @@ instance is required.
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
@@ -29,17 +29,18 @@ from sawtooth_memory.integrations.langgraph.graph import (
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_adapter(compiled_prompt=None):
     """Return a SawtoothLangGraphAdapter backed by a mocked ContextManager."""
     cm = MagicMock()
     cm.add_message = AsyncMock()
-    
+
     default_prompt = [
         {"role": "system", "content": "You are a test agent."},
         {"role": "user", "content": "Hello"},
     ]
-    
-    cm.build_prompt = MagicMock(
+
+    cm.build_prompt = AsyncMock(
         return_value=compiled_prompt if compiled_prompt is not None else default_prompt
     )
     return SawtoothLangGraphAdapter(cm)
@@ -55,6 +56,7 @@ def _make_llm(response_content: str = "Test response"):
 # ---------------------------------------------------------------------------
 # _is_transient_error
 # ---------------------------------------------------------------------------
+
 
 class TestIsTransientError:
     def test_429_is_transient(self):
@@ -91,6 +93,7 @@ class TestIsTransientError:
 # make_compression_node
 # ---------------------------------------------------------------------------
 
+
 class TestCompressionNode:
     @pytest.mark.asyncio
     async def test_returns_llm_context_key(self):
@@ -123,6 +126,7 @@ class TestCompressionNode:
         result = await node(state)
 
         from langchain_core.messages import SystemMessage, HumanMessage as HM
+
         assert isinstance(result["llm_context"][0], SystemMessage)
         assert isinstance(result["llm_context"][1], HM)
 
@@ -158,6 +162,7 @@ class TestCompressionNode:
 # ---------------------------------------------------------------------------
 # make_llm_node
 # ---------------------------------------------------------------------------
+
 
 class TestLlmNode:
     @pytest.mark.asyncio
@@ -242,6 +247,7 @@ class TestLlmNode:
 # build_sawtooth_graph — full pipeline
 # ---------------------------------------------------------------------------
 
+
 class TestBuildSawtoothGraph:
     @pytest.mark.asyncio
     async def test_happy_path_end_to_end(self):
@@ -294,10 +300,8 @@ class TestBuildSawtoothGraph:
         graph = build_sawtooth_graph(llm=llm, adapter=adapter)
 
         initial_human = HumanMessage(content="Ping", id="m-1")
-        result = await graph.ainvoke(
-            {"messages": [initial_human], "llm_context": []}
-        )
+        result = await graph.ainvoke({"messages": [initial_human], "llm_context": []})
 
         contents = [m.content for m in result["messages"]]
-        assert "Ping" in contents   # original preserved
-        assert "Pong" in contents   # AI reply appended
+        assert "Ping" in contents  # original preserved
+        assert "Pong" in contents  # AI reply appended

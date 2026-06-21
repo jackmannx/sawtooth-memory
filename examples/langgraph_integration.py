@@ -7,18 +7,22 @@ from langgraph.graph.message import add_messages
 from langchain_core.messages import HumanMessage, AIMessage
 
 from sawtooth_memory import ContextManager
-from sawtooth_memory.config import SawtoothConfig, OllamaConfig
+from sawtooth_memory.config import ContextManagerConfig, OllamaConfig
 from sawtooth_memory.integrations.langgraph.adapter import SawtoothLangGraphAdapter
+
 
 # Define standard LangGraph state
 class State(TypedDict):
     messages: Annotated[list, add_messages]
 
+
 async def main():
     # Initialize Sawtooth memory components
-    config = SawtoothConfig(ollama=OllamaConfig(model="llama3"))
-    cm = ContextManager(system_prompt="You are a helpful workflow agent.", config=config)
-    
+    config = ContextManagerConfig(ollama=OllamaConfig(model="llama3"))
+    cm = ContextManager(
+        system_prompt="You are a helpful workflow agent.", config=config
+    )
+
     # 1. Create the adapter, passing in the shared ContextManager
     adapter = SawtoothLangGraphAdapter(context_manager=cm)
 
@@ -26,16 +30,18 @@ async def main():
     async def chat_node(state: State):
         # A. Sync the LangGraph state into Sawtooth (safely deduplicated)
         await adapter.sync_state(state["messages"])
-        
+
         # B. Retrieve the compiled, compressed, and sanitized prompt
         # This strips orphaned ToolMessages and injects L1.5/L2 memory
-        safe_prompt = adapter.get_compiled_prompt()
-        
-        print(f"\n[Node Execution] Compiled Prompt contains {len(safe_prompt)} messages.")
-        
+        safe_prompt = await adapter.get_compiled_prompt()
+
+        print(
+            f"\n[Node Execution] Compiled Prompt contains {len(safe_prompt)} messages."
+        )
+
         # C. Normally you would pass `safe_prompt` to your LLM here:
         # response = await llm.ainvoke(safe_prompt)
-        
+
         # For this example, we mock the LLM response
         mock_response = AIMessage(content="I have processed your request.")
         return {"messages": [mock_response]}
@@ -50,13 +56,14 @@ async def main():
     # 4. Run the graph within the ContextManager's async lifecycle
     async with cm:
         print("--- Starting LangGraph Session ---")
-        
+
         inputs = {"messages": [HumanMessage(content="Initialize deployment sequence.")]}
-        
+
         async for event in graph.astream(inputs):
             for node, values in event.items():
                 print(f"Node '{node}' completed.")
                 print(f"Latest output: {values['messages'][-1].content}")
+
 
 if __name__ == "__main__":
     asyncio.run(main())

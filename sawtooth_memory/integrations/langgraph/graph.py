@@ -79,6 +79,7 @@ class AgentState(TypedDict):
 # Tenacity retry helpers
 # ---------------------------------------------------------------------------
 
+
 def _is_transient_error(exc: BaseException) -> bool:
     """
     Return True for HTTP errors that are worth retrying.
@@ -97,7 +98,9 @@ def _is_transient_error(exc: BaseException) -> bool:
 
     # Some clients embed the code in the message string
     msg = str(exc).lower()
-    return any(code in msg for code in ("429", "500", "502", "503", "504", "rate limit"))
+    return any(
+        code in msg for code in ("429", "500", "502", "503", "504", "rate limit")
+    )
 
 
 _llm_retry = retry(
@@ -135,7 +138,7 @@ def make_compression_node(adapter: SawtoothLangGraphAdapter):
             len(state["messages"]),
         )
         await adapter.sync_state(state["messages"])
-        compiled = adapter.get_compiled_prompt()
+        compiled = await adapter.get_compiled_prompt()
         logger.debug(
             "sawtooth_compression_node: compiled prompt has %d message(s)",
             len(compiled),

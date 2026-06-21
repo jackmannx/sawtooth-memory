@@ -5,10 +5,17 @@ Utilizes redis.asyncio to persist MemoryState across distributed clusters
 with near-zero latency.
 """
 
-from typing import Optional
+import json
+from typing import Any, Optional
 import redis.asyncio as redis
 
-from ..state import MemoryState
+from ..state import (
+    ArchivalMemory,
+    EntityLedger,
+    MemoryState,
+    SystemPrompt,
+    WorkingMemory,
+)
 from .base import BaseStorageAdapter
 
 
@@ -40,26 +47,41 @@ class RedisStorageAdapter(BaseStorageAdapter):
         self._client = redis.from_url(self.redis_url, decode_responses=True)
 
     def _get_key(self, session_id: str) -> str:
-        """Formats the namespace key for a given session."""
-        return f"{self.key_prefix}{session_id}"
+        """Formats the namespace key for a given session's private L1 state."""
+        return f"{self.key_prefix}{session_id}:l1"
+
+    @staticmethod
+    def _get_pool_key(pool_id: str) -> str:
+        """Formats the namespace key for shared multi-agent pool state."""
+        return f"sawtooth:pool:{pool_id}:shared"
 
     async def load_state(self, session_id: str) -> Optional[MemoryState]:
-        """Fetch the JSON payload and hydrate the Pydantic state machine."""
+        """Fetch the private session payload and hydrate L0/L1 state."""
         key = self._get_key(session_id)
         raw_data = await self._client.get(key)
 
         if not raw_data:
             return None
 
-        # Pydantic v2 flawlessly reconstructs the L0, L1, L1.5, and L2 tiers from JSON
-        return MemoryState.model_validate_json(raw_data)
+        payload: dict[str, Any] = json.loads(raw_data)
+        system_payload = payload.get("l0_system", {})
+        l1_payload = payload.get("l1_working", {})
+
+        return MemoryState(
+            l0_system=SystemPrompt.model_validate(system_payload),
+            l1_working=WorkingMemory.model_validate(l1_payload),
+            l1_5_entities=EntityLedger(),
+            l2_archival=ArchivalMemory(),
+        )
 
     async def save_state(self, session_id: str, state: MemoryState) -> None:
-        """Serialize the state and write to Redis with an optional TTL."""
+        """Serialize and write private per-session L0/L1 state with optional TTL."""
         key = self._get_key(session_id)
-
-        # Serialize entire state machine to a string
-        json_payload = state.model_dump_json()
+        payload = {
+            "l0_system": state.l0_system.model_dump(mode="json"),
+            "l1_working": state.l1_working.model_dump(mode="json"),
+        }
+        json_payload = json.dumps(payload)
 
         if self.ttl_seconds:
             await self._client.setex(key, self.ttl_seconds, json_payload)
@@ -70,6 +92,35 @@ class RedisStorageAdapter(BaseStorageAdapter):
         """Purge the session from the cache."""
         key = self._get_key(session_id)
         await self._client.delete(key)
+
+    async def load_pool_state(
+        self, pool_id: str
+    ) -> Optional[tuple[EntityLedger, ArchivalMemory]]:
+        """Fetch shared L1.5 + L2 state for all agents in a pool."""
+        key = self._get_pool_key(pool_id)
+        raw_data = await self._client.get(key)
+        if not raw_data:
+            return None
+
+        payload: dict[str, Any] = json.loads(raw_data)
+        entities = EntityLedger.model_validate(payload.get("l1_5_entities", {}))
+        archive = ArchivalMemory.model_validate(payload.get("l2_archival", {}))
+        return entities, archive
+
+    async def save_pool_state(
+        self, pool_id: str, entities: EntityLedger, archive: ArchivalMemory
+    ) -> None:
+        """Persist shared L1.5 + L2 state for all agents in a pool."""
+        key = self._get_pool_key(pool_id)
+        payload = {
+            "l1_5_entities": entities.model_dump(mode="json"),
+            "l2_archival": archive.model_dump(mode="json"),
+        }
+        json_payload = json.dumps(payload)
+        if self.ttl_seconds:
+            await self._client.setex(key, self.ttl_seconds, json_payload)
+        else:
+            await self._client.set(key, json_payload)
 
     async def close(self) -> None:
         """Gracefully close the connection pool."""

@@ -21,7 +21,7 @@ Quick start:
 
 import logging
 from pathlib import Path
-from typing import Any, Optional, Literal
+from typing import Any, Literal, Optional
 from .config import ContextManagerConfig
 from .compressor import CloudCompressor, OllamaCompressor
 from .exceptions import TokenLimitExceededError
@@ -203,6 +203,9 @@ class ContextManager:
             journal=self._journal,
             enable_deterministic_ner=self._config.enable_deterministic_ner,
             custom_ner_patterns=self._config.custom_ner_patterns,
+            storage_adapter=self._config.storage_adapter,
+            pool_id=self._config.pool_id,
+            session_id=self._config.session_id,
         )
 
         logger.debug(
@@ -214,6 +217,17 @@ class ContextManager:
         )
 
     async def start(self) -> None:
+        if self._config.storage_adapter:
+            loaded = await self._config.storage_adapter.load_state(
+                self._config.session_id
+            )
+            if loaded is not None:
+                self._state.l0_system = loaded.l0_system
+                self._state.l1_working = loaded.l1_working
+                if not self._config.pool_id:
+                    self._state.l1_5_entities = loaded.l1_5_entities
+                    self._state.l2_archival = loaded.l2_archival
+
         if self._enable_events and self._journal:
             await self._journal.start()
         await self._worker.start()
@@ -279,7 +293,26 @@ class ContextManager:
         elif self._monitor.should_trigger_compression(self._state):
             await self._trigger_compression()
 
-    def build_prompt(self) -> list[dict[str, str]]:
+        if self._config.storage_adapter:
+            await self._config.storage_adapter.save_state(
+                self._config.session_id, self._state
+            )
+
+    async def _sync_pool_state_from_storage(self) -> None:
+        adapter = self._config.storage_adapter
+        pool_id = self._config.pool_id
+        if not adapter or not pool_id:
+            return
+
+        pool_state = await adapter.load_pool_state(pool_id)
+        if pool_state is None:
+            return
+
+        entities, archive = pool_state
+        self._state.l1_5_entities = entities
+        self._state.l2_archival = archive
+
+    async def build_prompt(self) -> list[dict[str, str]]:
         """
         Compile all memory tiers into an OpenAI-compatible messages list.
 
@@ -298,6 +331,7 @@ class ContextManager:
 
         Followed by raw Working Memory (L1) messages.
         """
+        await self._sync_pool_state_from_storage()
         state = self._state
         system_parts: list[str] = []
 

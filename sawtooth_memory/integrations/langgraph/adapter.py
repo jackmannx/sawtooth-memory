@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Sequence
+from typing import Sequence, cast
 
 from langchain_core.messages import (
     AIMessage,
@@ -144,8 +144,7 @@ class SawtoothLangGraphAdapter:
             if role is None:
                 # Unknown message type — log and skip rather than crashing.
                 logger.warning(
-                    "sync_state: skipping unsupported message type %s "
-                    "(id=%s)",
+                    "sync_state: skipping unsupported message type %s (id=%s)",
                     type(msg).__name__,
                     msg_id,
                 )
@@ -164,7 +163,7 @@ class SawtoothLangGraphAdapter:
             len(self._processed_ids),
         )
 
-    def get_compiled_prompt(self) -> list[BaseMessage]:
+    async def get_compiled_prompt(self) -> list[BaseMessage]:
         """
         Build an optimised, compressed prompt and convert it to LangChain
         message objects.
@@ -185,7 +184,7 @@ class SawtoothLangGraphAdapter:
             the compiled L0 / L1.5 / L2 / active-L1 context windows, ready
             to pass directly to ``llm.ainvoke()``.
         """
-        raw_prompt: list[dict[str, str]] = self._context_manager.build_prompt()
+        raw_prompt: list[dict[str, str]] = await self._context_manager.build_prompt()
 
         # ── Pass 1: materialise raw dicts into typed LangChain objects ──────
         # ToolMessage construction is deferred to Pass 2 so we can first
@@ -193,9 +192,9 @@ class SawtoothLangGraphAdapter:
         pre_messages: list[BaseMessage] = []
 
         for item in raw_prompt:
-            role: str = item.get("role", "user")
+            role = item.get("role", "user")
             content: str = item.get("content", "")
-            msg_cls = _ROLE_TO_LC.get(role)  # type: ignore[arg-type]
+            msg_cls = _ROLE_TO_LC.get(cast(MessageRole, role))
             if msg_cls is None:
                 logger.warning(
                     "get_compiled_prompt: unknown role %r — defaulting to HumanMessage",
@@ -224,7 +223,11 @@ class SawtoothLangGraphAdapter:
                 for tc in msg.tool_calls:
                     # tool_calls items are dicts with an "id" key, or
                     # ToolCall typed-dicts depending on the langchain version.
-                    tc_id = tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", None)
+                    tc_id = (
+                        tc.get("id")
+                        if isinstance(tc, dict)
+                        else getattr(tc, "id", None)
+                    )
                     if tc_id:
                         active_tool_call_ids.add(tc_id)
 

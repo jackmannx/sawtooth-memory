@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any, List, Optional
 
-from ..state import MemoryState
+from ..state import ArchivalMemory, EntityLedger, MemoryState
 from .base import BaseStorageAdapter
 
 
@@ -94,6 +94,17 @@ class PostgresStorageAdapter(BaseStorageAdapter):
                 USING hnsw (embedding vector_cosine_ops)
                 """
             )
+            await conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS sawtooth_pools (
+                    pool_id VARCHAR(255) PRIMARY KEY,
+                    entities_payload JSONB NOT NULL,
+                    archive_payload JSONB NOT NULL,
+                    created_at TIMESTAMPTZ DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ DEFAULT NOW()
+                )
+                """
+            )
 
     @staticmethod
     def _hydrate_state(raw_payload: Any) -> MemoryState:
@@ -157,6 +168,61 @@ class PostgresStorageAdapter(BaseStorageAdapter):
                 "DELETE FROM sawtooth_sessions WHERE session_id = $1",
                 session_id,
             )
+
+    async def load_pool_state(
+        self, pool_id: str
+    ) -> Optional[tuple[EntityLedger, ArchivalMemory]]:
+        """Fetch shared L1.5 + L2 state for all agents in a pool."""
+        pool = await self._ensure_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT entities_payload, archive_payload
+                FROM sawtooth_pools
+                WHERE pool_id = $1
+                """,
+                pool_id,
+            )
+        if row is None:
+            return None
+
+        entities = EntityLedger.model_validate(row["entities_payload"])
+        archive = ArchivalMemory.model_validate(row["archive_payload"])
+        return entities, archive
+
+    async def save_pool_state(
+        self, pool_id: str, entities: EntityLedger, archive: ArchivalMemory
+    ) -> None:
+        """Persist shared L1.5 + L2 state for all agents in a pool."""
+        pool = await self._ensure_pool()
+        entities_payload = entities.model_dump(mode="json")
+        archive_payload = archive.model_dump(mode="json")
+
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    """
+                    SELECT pool_id FROM sawtooth_pools
+                    WHERE pool_id = $1 FOR UPDATE
+                    """,
+                    pool_id,
+                )
+                await conn.execute(
+                    """
+                    INSERT INTO sawtooth_pools (
+                        pool_id, entities_payload, archive_payload, updated_at
+                    )
+                    VALUES ($1, $2::jsonb, $3::jsonb, NOW())
+                    ON CONFLICT (pool_id)
+                    DO UPDATE SET
+                        entities_payload = EXCLUDED.entities_payload,
+                        archive_payload = EXCLUDED.archive_payload,
+                        updated_at = NOW()
+                    """,
+                    pool_id,
+                    entities_payload,
+                    archive_payload,
+                )
 
     async def upsert_vector_chunk(
         self, session_id: str, text: str, embedding: List[float]

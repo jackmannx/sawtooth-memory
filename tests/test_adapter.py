@@ -9,7 +9,7 @@ These tests mock out the ContextManager so they run without Ollama.
 from __future__ import annotations
 
 import json
-from unittest.mock import AsyncMock, MagicMock, call, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from langchain_core.messages import (
@@ -31,25 +31,30 @@ from sawtooth_memory.integrations.langgraph.adapter import (
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_cm(build_prompt_return=None):
     """Return a mocked ContextManager."""
     cm = MagicMock()
     cm.add_message = AsyncMock()
-    
+
     default_return = [
         {"role": "system", "content": "[SYSTEM_L0]\nYou are a test agent."},
         {"role": "user", "content": "Hello"},
         {"role": "assistant", "content": "Hi there!"},
     ]
-    
-    cm.build_prompt = MagicMock(
-        return_value=build_prompt_return if build_prompt_return is not None else default_return
+
+    cm.build_prompt = AsyncMock(
+        return_value=build_prompt_return
+        if build_prompt_return is not None
+        else default_return
     )
     return cm
+
 
 # ---------------------------------------------------------------------------
 # _extract_content
 # ---------------------------------------------------------------------------
+
 
 class TestExtractContent:
     def test_plain_string(self):
@@ -93,7 +98,7 @@ class TestExtractContent:
         # Use a MagicMock to bypass LangChain's strict Pydantic initialization
         msg = MagicMock(spec=BaseMessage)
         msg.content = {"key": "val"}
-        
+
         # json.dumps will output double quotes, so check for exact string match
         assert _extract_content(msg) == '{"key": "val"}'
 
@@ -101,6 +106,7 @@ class TestExtractContent:
 # ---------------------------------------------------------------------------
 # _msg_id
 # ---------------------------------------------------------------------------
+
 
 class TestMsgId:
     def test_uses_msg_id_when_present(self):
@@ -117,6 +123,7 @@ class TestMsgId:
 # ---------------------------------------------------------------------------
 # SawtoothLangGraphAdapter.sync_state
 # ---------------------------------------------------------------------------
+
 
 class TestSyncState:
     @pytest.mark.asyncio
@@ -207,8 +214,10 @@ class TestSyncState:
 # SawtoothLangGraphAdapter.get_compiled_prompt
 # ---------------------------------------------------------------------------
 
+
 class TestGetCompiledPrompt:
-    def test_returns_correct_lc_types_no_tool_messages(self):
+    @pytest.mark.asyncio
+    async def test_returns_correct_lc_types_no_tool_messages(self):
         """Non-tool roles are converted to the correct LangChain message types."""
         cm = _make_cm(
             build_prompt_return=[
@@ -218,13 +227,14 @@ class TestGetCompiledPrompt:
             ]
         )
         adapter = SawtoothLangGraphAdapter(cm)
-        result = adapter.get_compiled_prompt()
+        result = await adapter.get_compiled_prompt()
 
         assert isinstance(result[0], SystemMessage)
         assert isinstance(result[1], HumanMessage)
         assert isinstance(result[2], AIMessage)
 
-    def test_orphaned_tool_message_is_dropped(self):
+    @pytest.mark.asyncio
+    async def test_orphaned_tool_message_is_dropped(self):
         """A ToolMessage with no matching AIMessage.tool_calls entry is removed."""
         cm = _make_cm(
             build_prompt_return=[
@@ -237,7 +247,7 @@ class TestGetCompiledPrompt:
             ]
         )
         adapter = SawtoothLangGraphAdapter(cm)
-        result = adapter.get_compiled_prompt()
+        result = await adapter.get_compiled_prompt()
 
         # The ToolMessage must be removed; only three messages remain.
         assert len(result) == 3
@@ -267,9 +277,6 @@ class TestGetCompiledPrompt:
         # verify the filter logic directly by constructing the adapter's internal
         # scenario via a mock that returns the pre-built objects.
 
-        cm = _make_cm(build_prompt_return=[])
-        adapter = SawtoothLangGraphAdapter(cm)
-
         # Override build_prompt to produce raw dicts including a tool role entry,
         # then simulate a live AIMessage in the same window by injecting the
         # active tool_call_id into the scan.  We test the filter logic directly:
@@ -278,23 +285,26 @@ class TestGetCompiledPrompt:
 
         # Replicate Pass 3 filter logic to confirm correct behaviour.
         kept = [
-            m for m in messages_in
+            m
+            for m in messages_in
             if not isinstance(m, ToolMessage) or m.tool_call_id in active_ids
         ]
         assert len(kept) == 2
         assert isinstance(kept[1], ToolMessage)
 
-    def test_content_is_preserved(self):
+    @pytest.mark.asyncio
+    async def test_content_is_preserved(self):
         cm = _make_cm(
             build_prompt_return=[
                 {"role": "user", "content": "Exact content preserved"},
             ]
         )
         adapter = SawtoothLangGraphAdapter(cm)
-        result = adapter.get_compiled_prompt()
+        result = await adapter.get_compiled_prompt()
         assert result[0].content == "Exact content preserved"
 
-    def test_unknown_role_defaults_to_human(self):
+    @pytest.mark.asyncio
+    async def test_unknown_role_defaults_to_human(self):
         """Unknown roles should produce a HumanMessage, not raise."""
         cm = _make_cm(
             build_prompt_return=[
@@ -302,21 +312,24 @@ class TestGetCompiledPrompt:
             ]
         )
         adapter = SawtoothLangGraphAdapter(cm)
-        result = adapter.get_compiled_prompt()
+        result = await adapter.get_compiled_prompt()
         assert isinstance(result[0], HumanMessage)
 
-    def test_empty_prompt(self):
+    @pytest.mark.asyncio
+    async def test_empty_prompt(self):
         cm = _make_cm(build_prompt_return=[])
         adapter = SawtoothLangGraphAdapter(cm)
-        assert adapter.get_compiled_prompt() == []
+        assert await adapter.get_compiled_prompt() == []
 
-    def test_calls_build_prompt_on_context_manager(self):
+    @pytest.mark.asyncio
+    async def test_calls_build_prompt_on_context_manager(self):
         cm = _make_cm()
         adapter = SawtoothLangGraphAdapter(cm)
-        adapter.get_compiled_prompt()
-        cm.build_prompt.assert_called_once()
+        await adapter.get_compiled_prompt()
+        cm.build_prompt.assert_awaited_once()
 
-    def test_multiple_orphaned_tool_messages_all_dropped(self):
+    @pytest.mark.asyncio
+    async def test_multiple_orphaned_tool_messages_all_dropped(self):
         """Multiple orphaned ToolMessages are all removed in one pass."""
         cm = _make_cm(
             build_prompt_return=[
@@ -327,7 +340,7 @@ class TestGetCompiledPrompt:
             ]
         )
         adapter = SawtoothLangGraphAdapter(cm)
-        result = adapter.get_compiled_prompt()
+        result = await adapter.get_compiled_prompt()
 
         assert len(result) == 2
         assert not any(isinstance(m, ToolMessage) for m in result)
