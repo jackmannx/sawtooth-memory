@@ -15,6 +15,7 @@ This documentation provides a deep dive into the architecture, configuration, an
 6. [Observability & Telemetry](#6-observability--telemetry)
 7. [LangGraph Integration](#7-langgraph-integration)
 8. [Persistence & Journaling](#8-persistence--journaling)
+9. [Distributed Storage & L3 Semantic Archival](#9-distributed-storage--l3-semantic-archival)
 
 ---
 
@@ -84,6 +85,7 @@ When `build_prompt()` is called, Sawtooth constructs the prompt using a strict h
 * **L2 (Archive):** Highly compressed, token-efficient narrative of older conversation turns.
 * **L1.5 (Ledger):** Exact string matching for UUIDs, transaction IDs, names, and explicit rules extracted during compression.
 * **L1 (Working):** The uncompressed, verbatim text of the most recent `N` conversation turns.
+* **L3 (Semantic Archive):** Vector-indexed chunks of evicted L1 text stored in pgvector (metadata only in `MemoryState`; vectors live in the storage adapter). Retrieval is exposed via `search_semantic_archive()` but is not yet injected into `build_prompt()`.
 
 ---
 
@@ -146,6 +148,14 @@ v2_config = ContextManagerConfig(background_model="gpt-4o-mini")
 * `soft_limit_tokens`: The threshold that awakens the background worker.
 * `hard_limit_tokens`: A strict ceiling. If the worker cannot compress fast enough (e.g., due to API rate limits), the system will brutally truncate old messages to prevent your main agent from crashing due to context window overflow.
 * `chunk_size`: The number of messages shifted from L1 to L2 per compression cycle.
+
+**L3 Semantic Storage Parameters:**
+
+* `enable_l3_semantic_storage`: When `True`, evicted L1 text is chunked, batch-embedded, and persisted to pgvector during background compression. Requires a `PostgresStorageAdapter`.
+* `embedding_backend`: `"hash"` for deterministic local vectors (tests/dev) or `"openai"` for production-quality embeddings.
+* `embedding_model`: OpenAI embedding model name (default: `text-embedding-3-small`).
+* `embedding_dimension`: Vector width; must match `PostgresStorageAdapter.embedding_dimension`.
+* `l3_chunk_max_chars`: Maximum characters per semantic chunk before splitting (default: 2000).
 
 ---
 
@@ -262,6 +272,68 @@ When the `ContextManager` is running, every modification to the L1 buffer, L1.5 
 
 If the application crashes unexpectedly, re-initializing a `ContextManager` with the same configuration will automatically replay the journal, restoring the exact state of the hierarchical memory stack prior to the crash.
 
-*Note: In production environments spanning multiple stateless containers, you should implement a custom Journal class that writes to Redis or PostgreSQL instead of the local filesystem (Planned for Phase 3).*
+*Note: In production environments spanning multiple stateless containers, use `RedisStorageAdapter` or `PostgresStorageAdapter` instead of the local filesystem journal. See [Distributed Storage & L3 Semantic Archival](#9-distributed-storage--l3-semantic-archival).*
+
+---
+
+## 9. Distributed Storage & L3 Semantic Archival
+
+### Storage Backends
+
+| Adapter | Scope | Best For |
+|---------|-------|----------|
+| `RedisStorageAdapter` | L0+L1 per session; L1.5+L2 per pool | High-speed ephemeral sessions |
+| `PostgresStorageAdapter` | Full `MemoryState` JSONB + pgvector L3 | Durable multi-container deployments |
+
+Configure via `ContextManagerConfig.storage_adapter` and `session_id`. Multi-agent pools use `pool_id` to share L1.5 and L2 across agents.
+
+**Postgres setup:** Install the [pgvector](https://github.com/pgvector/pgvector) extension on your PostgreSQL server before using `PostgresStorageAdapter`:
+
+```sql
+CREATE EXTENSION IF NOT EXISTS vector;
+```
+
+### L3 Semantic Vector Archival (Storage Layer)
+
+L3 complements L2's narrative summary with **semantic vector chunks** of evicted L1 text. During each compression cycle the background worker:
+
+1. Chunks the evicted L1 transcript (paragraph-aware splitting).
+2. Batch-embeds all chunks in a single provider call.
+3. Batch-inserts vectors into `sawtooth_semantic_vectors` via `executemany`.
+
+Efficiency choices:
+- Embeddings are batched per compression cycle (one HTTP call for OpenAI).
+- Postgres writes use a single transaction with `executemany`.
+- HNSW cosine index on embeddings for fast similarity search.
+- Session-scoped B-tree index on `session_id`.
+
+**Retrieval is not wired into `build_prompt()`** in this release. Use the storage-layer API:
+
+```python
+matches = await cm.search_semantic_archive("transaction ID dispute", top_k=5)
+stats = await cm.l3_chunk_count()
+trace = cm.explain_prompt()  # includes l3_semantic metadata with in_prompt=False
+```
+
+Enable L3 indexing:
+
+```python
+from sawtooth_memory.storage.postgres_adapter import PostgresStorageAdapter
+
+postgres = PostgresStorageAdapter(
+    dsn="postgresql://user:pass@localhost/sawtooth",
+    embedding_dimension=1536,
+)
+
+config = ContextManagerConfig(
+    storage_adapter=postgres,
+    session_id="user_123",
+    enable_l3_semantic_storage=True,
+    embedding_backend="openai",  # or "hash" for local/tests
+    embedding_dimension=1536,
+)
+```
+
+Telemetry: subscribe to `l3.vector_indexed` events on the event bus for chunk counts and embedding backend metadata.
 
 ---

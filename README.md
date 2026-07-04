@@ -323,6 +323,51 @@ async def main():
         prompt = await cm.build_prompt()
 ```
 
+### 7. Semantic Vector L3 Archival Memory (Storage Layer)
+
+Sawtooth can index evicted L1 conversation text into a **pgvector-backed L3 semantic archive** during background compression. Vectors are stored separately from the JSONB `MemoryState` payload to keep session snapshots lean.
+
+**Important:** L3 retrieval is available via `search_semantic_archive()` but is **not yet injected into `build_prompt()`**. L2 narrative summaries remain the only archival content in the compiled prompt until RAG retrieval is wired in a future release.
+
+Requirements:
+- `PostgresStorageAdapter` with the PostgreSQL `vector` extension installed
+- `enable_l3_semantic_storage=True` on `ContextManagerConfig`
+- Matching `embedding_dimension` on both the adapter and config
+
+```python
+import asyncio
+from sawtooth_memory import ContextManager, ContextManagerConfig
+from sawtooth_memory.storage.postgres_adapter import PostgresStorageAdapter
+
+async def main():
+    postgres = PostgresStorageAdapter(
+        dsn="postgresql://user:pass@localhost:5432/sawtooth",
+        embedding_dimension=384,
+    )
+
+    config = ContextManagerConfig(
+        background_model="gpt-4o-mini",
+        storage_adapter=postgres,
+        session_id="user_session_994",
+        enable_l3_semantic_storage=True,
+        embedding_backend="hash",       # "openai" for production embeddings
+        embedding_dimension=384,
+        l3_chunk_max_chars=2000,
+    )
+
+    async with ContextManager(system_prompt="You are a cluster node agent.", config=config) as cm:
+        await cm.add_message("user", "Router firmware is v2.4.1 and drops packets nightly.")
+        # After background compression, evicted L1 text is chunked, embedded, and stored in L3.
+
+        # Storage-layer retrieval (not yet wired into build_prompt):
+        matches = await cm.search_semantic_archive("router firmware packets", top_k=3)
+        for chunk in matches:
+            print(f"[{chunk.similarity:.2f}] {chunk.text}")
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
 ## Roadmap
 
 - **Phase 1: Core Architecture**
@@ -343,7 +388,7 @@ async def main():
 - [x] Redis Distributed Storage Adapter (High-Speed Session Pooling)
 - [x] Postgres Storage Adapter (Persistent Relational Cache with pgvector)
 - [x] Multi-Agent Memory Pooling (Shared contextual state)
-- [ ] Semantic Vector L3 Archival Memory (RAG integration — storage layer only; retrieval not yet wired into `build_prompt()`)
+- [x] Semantic Vector L3 Archival Memory (RAG integration — storage layer complete; retrieval not yet wired into `build_prompt()`)
 
 ---
 
