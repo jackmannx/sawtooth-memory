@@ -7,13 +7,14 @@ for safe concurrent access across distributed stateless containers.
 
 from __future__ import annotations
 
-from typing import Any, List, Optional
+from typing import Any, List, Sequence, Tuple
 
 from ..state import ArchivalMemory, EntityLedger, MemoryState
 from .base import BaseStorageAdapter
+from .semantic import SemanticChunkResult, SemanticStorageAdapter
 
 
-class PostgresStorageAdapter(BaseStorageAdapter):
+class PostgresStorageAdapter(BaseStorageAdapter, SemanticStorageAdapter):
     """
     Async PostgreSQL implementation of the Sawtooth storage contract.
 
@@ -83,7 +84,8 @@ class PostgresStorageAdapter(BaseStorageAdapter):
                     session_id VARCHAR(255) REFERENCES sawtooth_sessions(session_id)
                         ON DELETE CASCADE,
                     text_chunk TEXT NOT NULL,
-                    embedding VECTOR({dim})
+                    embedding VECTOR({dim}),
+                    created_at TIMESTAMPTZ DEFAULT NOW()
                 )
                 """
             )
@@ -92,6 +94,12 @@ class PostgresStorageAdapter(BaseStorageAdapter):
                 CREATE INDEX IF NOT EXISTS sawtooth_vector_idx
                 ON sawtooth_semantic_vectors
                 USING hnsw (embedding vector_cosine_ops)
+                """
+            )
+            await conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS sawtooth_vector_session_idx
+                ON sawtooth_semantic_vectors (session_id)
                 """
             )
             await conn.execute(
@@ -114,7 +122,7 @@ class PostgresStorageAdapter(BaseStorageAdapter):
             return MemoryState.model_validate_json(raw_payload)
         return MemoryState.model_validate(raw_payload)
 
-    async def load_state(self, session_id: str) -> Optional[MemoryState]:
+    async def load_state(self, session_id: str) -> MemoryState | None:
         """Fetch the JSONB payload and hydrate the Pydantic state machine."""
         pool = await self._ensure_pool()
         async with pool.acquire() as conn:
@@ -171,7 +179,7 @@ class PostgresStorageAdapter(BaseStorageAdapter):
 
     async def load_pool_state(
         self, pool_id: str
-    ) -> Optional[tuple[EntityLedger, ArchivalMemory]]:
+    ) -> tuple[EntityLedger, ArchivalMemory] | None:
         """Fetch shared L1.5 + L2 state for all agents in a pool."""
         pool = await self._ensure_pool()
         async with pool.acquire() as conn:
@@ -224,21 +232,95 @@ class PostgresStorageAdapter(BaseStorageAdapter):
                     archive_payload,
                 )
 
+    async def upsert_vector_chunks_batch(
+        self,
+        session_id: str,
+        chunks: Sequence[Tuple[str, List[float]]],
+    ) -> int:
+        """
+        Batch-insert text chunks and embeddings in a single round-trip.
+
+        Ensures the parent session row exists so the foreign-key constraint
+        on ``sawtooth_semantic_vectors`` is satisfied.
+        """
+        if not chunks:
+            return 0
+
+        pool = await self._ensure_pool()
+        texts = [text for text, _ in chunks]
+        embeddings = [embedding for _, embedding in chunks]
+
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    """
+                    INSERT INTO sawtooth_sessions (session_id, state_payload, updated_at)
+                    VALUES ($1, '{}'::jsonb, NOW())
+                    ON CONFLICT (session_id) DO NOTHING
+                    """,
+                    session_id,
+                )
+                await conn.executemany(
+                    """
+                    INSERT INTO sawtooth_semantic_vectors
+                        (session_id, text_chunk, embedding)
+                    VALUES ($1, $2, $3)
+                    """,
+                    [(session_id, text, embedding) for text, embedding in zip(texts, embeddings)],
+                )
+
+        return len(chunks)
+
     async def upsert_vector_chunk(
         self, session_id: str, text: str, embedding: List[float]
     ) -> None:
-        """Insert a text chunk and its embedding into the semantic vector layer."""
+        """Insert a single text chunk and its embedding into the semantic vector layer."""
+        await self.upsert_vector_chunks_batch(session_id, [(text, embedding)])
+
+    async def search_similar(
+        self,
+        session_id: str,
+        query_embedding: List[float],
+        top_k: int = 5,
+    ) -> List[SemanticChunkResult]:
+        """Return the *top_k* chunks most similar to *query_embedding*."""
+        if top_k < 1:
+            return []
+
         pool = await self._ensure_pool()
         async with pool.acquire() as conn:
-            await conn.execute(
+            rows = await conn.fetch(
                 """
-                INSERT INTO sawtooth_semantic_vectors (session_id, text_chunk, embedding)
-                VALUES ($1, $2, $3)
+                SELECT
+                    text_chunk,
+                    1 - (embedding <=> $2) AS similarity
+                FROM sawtooth_semantic_vectors
+                WHERE session_id = $1
+                ORDER BY embedding <=> $2
+                LIMIT $3
                 """,
                 session_id,
-                text,
-                embedding,
+                query_embedding,
+                top_k,
             )
+
+        return [
+            SemanticChunkResult(text=row["text_chunk"], similarity=float(row["similarity"]))
+            for row in rows
+        ]
+
+    async def count_vector_chunks(self, session_id: str) -> int:
+        """Return the number of indexed vector chunks for *session_id*."""
+        pool = await self._ensure_pool()
+        async with pool.acquire() as conn:
+            count = await conn.fetchval(
+                """
+                SELECT COUNT(*) FROM sawtooth_semantic_vectors
+                WHERE session_id = $1
+                """,
+                session_id,
+            )
+        return int(count or 0)
 
     async def close(self) -> None:
         """Gracefully close the connection pool."""

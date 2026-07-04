@@ -104,6 +104,12 @@ async def test_postgres_load_returns_none_for_missing_session():
 @pytest.mark.asyncio
 async def test_postgres_upsert_vector_chunk():
     mock_conn = AsyncMock()
+
+    @asynccontextmanager
+    async def transaction():
+        yield
+
+    mock_conn.transaction = transaction
     adapter = _wire_adapter(mock_conn)
 
     session_id = "enterprise_session_552"
@@ -112,10 +118,83 @@ async def test_postgres_upsert_vector_chunk():
 
     await adapter.upsert_vector_chunk(session_id, text, embedding)
 
-    mock_conn.execute.assert_called_once()
-    sql = mock_conn.execute.call_args[0][0]
+    assert mock_conn.execute.call_count >= 1
+    batch_calls = [
+        call for call in mock_conn.execute.call_args_list
+        if "INSERT INTO sawtooth_sessions" in call[0][0]
+    ]
+    assert batch_calls
+    mock_conn.executemany.assert_awaited_once()
+    sql = mock_conn.executemany.call_args[0][0]
     assert "INSERT INTO sawtooth_semantic_vectors" in sql
-    assert mock_conn.execute.call_args[0][1:] == (session_id, text, embedding)
+    rows = mock_conn.executemany.call_args[0][1]
+    assert rows == [(session_id, text, embedding)]
+
+
+@pytest.mark.asyncio
+async def test_postgres_upsert_vector_chunks_batch():
+    mock_conn = AsyncMock()
+
+    @asynccontextmanager
+    async def transaction():
+        yield
+
+    mock_conn.transaction = transaction
+    adapter = _wire_adapter(mock_conn)
+
+    session_id = "batch_session"
+    chunks = [
+        ("chunk one", [0.1] * 1536),
+        ("chunk two", [0.2] * 1536),
+    ]
+
+    inserted = await adapter.upsert_vector_chunks_batch(session_id, chunks)
+
+    assert inserted == 2
+    mock_conn.executemany.assert_awaited_once()
+    rows = mock_conn.executemany.call_args[0][1]
+    assert len(rows) == 2
+
+
+@pytest.mark.asyncio
+async def test_postgres_search_similar():
+    mock_conn = AsyncMock()
+    mock_conn.fetch.return_value = [
+        {"text_chunk": "router issue", "similarity": 0.87},
+        {"text_chunk": "network reset", "similarity": 0.75},
+    ]
+    adapter = _wire_adapter(mock_conn)
+
+    query = [0.5] * 1536
+    results = await adapter.search_similar("session_x", query, top_k=2)
+
+    assert len(results) == 2
+    assert results[0].text == "router issue"
+    assert results[0].similarity == 0.87
+    mock_conn.fetch.assert_awaited_once()
+    sql = mock_conn.fetch.call_args[0][0]
+    assert "ORDER BY embedding <=>" in sql
+
+
+@pytest.mark.asyncio
+async def test_postgres_count_vector_chunks():
+    mock_conn = AsyncMock()
+    mock_conn.fetchval.return_value = 7
+    adapter = _wire_adapter(mock_conn)
+
+    count = await adapter.count_vector_chunks("session_y")
+
+    assert count == 7
+    mock_conn.fetchval.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_postgres_batch_insert_empty_is_noop():
+    mock_conn = AsyncMock()
+    adapter = _wire_adapter(mock_conn)
+
+    assert await adapter.upsert_vector_chunks_batch("session", []) == 0
+    mock_conn.executemany.assert_not_called()
 
 
 @pytest.mark.asyncio
