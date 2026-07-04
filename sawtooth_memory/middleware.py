@@ -12,7 +12,7 @@ Quick start:
         await cm.add_message("user", "Analyse Q3 revenue.")
         await cm.add_message("assistant", "Connecting to the database...")
 
-        messages = cm.build_prompt()
+        messages = await cm.build_prompt()
         # response = await openai_client.chat.completions.create(
         #     model="gpt-4o",
         #     messages=messages,

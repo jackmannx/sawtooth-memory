@@ -18,7 +18,7 @@ Example:
 
     async with ContextManager("You are a helpful agent.", config) as cm:
         await cm.add_message("user", "What is 2 + 2?")
-        messages = cm.build_prompt()
+        messages = await cm.build_prompt()
 """
 
 from .config import ContextManagerConfig, OllamaConfig

@@ -167,7 +167,7 @@ async def agent_loop():
         await cm.add_message("user", "Hello.")
         await cm.add_message("assistant", "Hi there.")
 
-        payload = cm.build_prompt()
+        payload = await cm.build_prompt()
 
 ```
 
@@ -227,29 +227,28 @@ cm.event_bus.subscribe(EventType.COMPRESSION_COMPLETED, on_compression)
 
 ## 7. LangGraph Integration
 
-Sawtooth provides `SawtoothMemorySaver`, which implements LangGraph's `BaseCheckpointSaver` interface. This allows you to replace standard LangGraph memory with Sawtooth's asynchronous hierarchical memory.
+Sawtooth provides `SawtoothLangGraphAdapter`, which syncs LangGraph message state into the hierarchical memory stack and returns a sanitized, compressed prompt (including automatic orphan `ToolMessage` removal).
 
 ```python
-from langgraph.graph import StateGraph
-from sawtooth_memory.integrations.langgraph import SawtoothMemorySaver
+from langgraph.graph import StateGraph, START, END
+from langgraph.graph.message import add_messages
 from sawtooth_memory import ContextManager, ContextManagerConfig
+from sawtooth_memory.integrations.langgraph import SawtoothLangGraphAdapter
 
-# 1. Initialize Sawtooth
 config = ContextManagerConfig(...)
 cm = ContextManager(system_prompt="System", config=config)
-await cm.start()
+adapter = SawtoothLangGraphAdapter(context_manager=cm)
 
-# 2. Wrap in LangGraph Adapter
-checkpointer = SawtoothMemorySaver(cm)
+async def chat_node(state):
+    await adapter.sync_state(state["messages"])
+    safe_prompt = await adapter.get_compiled_prompt()
+    # response = await llm.ainvoke(safe_prompt)
+    return {"messages": [...]}
 
-# 3. Compile Graph
-builder = StateGraph(MyState)
-graph = builder.compile(checkpointer=checkpointer)
-
-# 4. Execute
-config = {"configurable": {"thread_id": "session_1"}}
-for event in graph.stream({"messages": [("user", "Hello")]}, config):
-    print(event)
+async with cm:
+    graph = StateGraph(State).add_node("agent", chat_node).compile()
+    async for event in graph.astream({"messages": [("user", "Hello")]}):
+        print(event)
 
 ```
 

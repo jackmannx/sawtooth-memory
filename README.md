@@ -1,6 +1,6 @@
 # Sawtooth Memory
 
-[![Automated Test Suite](https://github.com/HtooTayZa/sawtooth-memory/actions/workflows/test.yaml/badge.svg)](https://github.com/HtooTayZa/sawtooth-memory/actions/workflows/test.yaml)
+[![Automated Test Suite](https://github.com/jackmannx/sawtooth-memory/actions/workflows/test.yaml/badge.svg)](https://github.com/jackmannx/sawtooth-memory/actions/workflows/test.yaml)
 [![PyPI version](https://badge.fury.io/py/sawtooth-memory.svg)](https://badge.fury.io/py/sawtooth-memory)
 [![Python Support](https://img.shields.io/pypi/pyversions/sawtooth-memory.svg)](https://pypi.org/project/sawtooth-memory/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
