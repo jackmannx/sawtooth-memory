@@ -159,6 +159,32 @@ class ContextManagerConfig(BaseModel):
         description="Namespace mapping for multi-agent pool synchronization.",
     )
 
+    # L3 semantic vector archival (storage layer; retrieval not in build_prompt)
+    enable_l3_semantic_storage: bool = Field(
+        default=False,
+        description=(
+            "Index evicted L1 text into pgvector-backed L3 semantic storage "
+            "during background compression. Requires a SemanticStorageAdapter "
+            "(e.g. PostgresStorageAdapter)."
+        ),
+    )
+    embedding_backend: str = Field(
+        default="hash",
+        description='Embedding provider for L3 indexing: "hash" (local/tests) or "openai".',
+    )
+    embedding_model: str = Field(
+        default="text-embedding-3-small",
+        description="OpenAI embedding model when embedding_backend='openai'.",
+    )
+    embedding_dimension: int = Field(
+        default=1536,
+        description="Vector width; must match PostgresStorageAdapter.embedding_dimension.",
+    )
+    l3_chunk_max_chars: int = Field(
+        default=2000,
+        description="Maximum characters per L3 semantic chunk before splitting.",
+    )
+
     ollama: Optional[OllamaConfig] = None
     cloud: Optional[CloudConfig] = None
 

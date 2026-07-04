@@ -43,6 +43,9 @@ from .events.types import (
     L1EvictionEvent,
 )
 from .journal import AsyncCompressionJournal
+from .embeddings.factory import create_embedding_provider
+from .l3_indexer import SemanticIndexer
+from .storage.semantic import SemanticChunkResult, supports_semantic_storage
 
 logger = logging.getLogger(__name__)
 
@@ -196,6 +199,23 @@ class ContextManager:
             )
             self._compressor = OllamaCompressor(ollama_cfg)
 
+        self._l3_indexer: SemanticIndexer | None = None
+        if (
+            self._config.enable_l3_semantic_storage
+            and self._config.storage_adapter
+            and supports_semantic_storage(self._config.storage_adapter)
+        ):
+            embedder = create_embedding_provider(
+                self._config.embedding_backend,  # type: ignore[arg-type]
+                model=self._config.embedding_model,
+                dimension=self._config.embedding_dimension,
+            )
+            self._l3_indexer = SemanticIndexer(
+                storage=self._config.storage_adapter,
+                embedder=embedder,
+                chunk_max_chars=self._config.l3_chunk_max_chars,
+            )
+
         self._worker = CompressionWorker(
             compressor=self._compressor,
             fallback_truncate=self._config.fallback_truncate,
@@ -206,6 +226,9 @@ class ContextManager:
             storage_adapter=self._config.storage_adapter,
             pool_id=self._config.pool_id,
             session_id=self._config.session_id,
+            l3_indexer=self._l3_indexer,
+            embedding_backend=self._config.embedding_backend,
+            embedding_model=self._config.embedding_model,
         )
 
         logger.debug(
@@ -357,6 +380,26 @@ class ContextManager:
 
         return messages
 
+    async def search_semantic_archive(
+        self, query: str, top_k: int = 5
+    ) -> list[SemanticChunkResult]:
+        """
+        Retrieve L3 semantic chunks similar to *query*.
+
+        This is the storage-layer retrieval API. Results are **not**
+        injected into :meth:`build_prompt` until a future release wires
+        RAG retrieval into the prompt compiler.
+        """
+        if not self._l3_indexer:
+            return []
+        return await self._l3_indexer.search(self._config.session_id, query, top_k)
+
+    async def l3_chunk_count(self) -> int:
+        """Return the number of indexed L3 semantic chunks for this session."""
+        if not self._l3_indexer:
+            return self._state.l3_semantic.chunk_count
+        return await self._l3_indexer.count(self._config.session_id)
+
     def explain_prompt(self) -> dict:
         """
         Deliverable 2.3: Recall Explainability Traces
@@ -376,6 +419,16 @@ class ContextManager:
             },
             "l1_5_entities": [],
             "l1_working_messages": len(self._state.l1_working.messages),
+            "l3_semantic": {
+                "chunk_count": self._state.l3_semantic.chunk_count,
+                "last_indexed_at": (
+                    self._state.l3_semantic.last_indexed_at.isoformat()
+                    if self._state.l3_semantic.last_indexed_at
+                    else None
+                ),
+                "origin": "Background L3 vector indexing (L1 evictions → pgvector)",
+                "in_prompt": False,
+            },
         }
 
         # 1. Rebuild the historical lineage from the JSONL journal safely
@@ -549,6 +602,8 @@ class ContextManager:
             "l1_message_count": len(self._state.l1_working.messages),
             "l1_5_entity_count": len(self._state.l1_5_entities.entities),
             "l2_tokens": self._monitor.count_text(self._state.l2_archival.narrative),
+            "l3_chunk_count": self._state.l3_semantic.chunk_count,
+            "l3_enabled": self._l3_indexer is not None,
             "worker": self._worker.stats,
         }
 

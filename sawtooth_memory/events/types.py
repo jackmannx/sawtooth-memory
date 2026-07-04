@@ -97,3 +97,13 @@ class CompressionCycleStartEvent(SawtoothEvent):
     event_type: Literal["compression.cycle_started"] = "compression.cycle_started"
     current_l1_tokens: int = 0
     chunk_size: int = 0
+
+
+@dataclass
+class L3VectorIndexedEvent(SawtoothEvent):
+    event_type: Literal["l3.vector_indexed"] = "l3.vector_indexed"
+    chunks_indexed: int = 0
+    total_chunks: int = 0
+    source_chars: int = 0
+    embedding_backend: str = ""
+    embedding_model: str = ""

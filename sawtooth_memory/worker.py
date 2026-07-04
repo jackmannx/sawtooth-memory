@@ -28,10 +28,12 @@ from .state import ArchivalMemory, EntityLedger, MemoryState, Message
 from .events.bus import EventBus
 from .events.types import (
     L2SummaryGeneratedEvent,
+    L3VectorIndexedEvent,
     CompressionCycleCompleteEvent,
     CompressionCycleFailedEvent,
 )
 from .journal import AsyncCompressionJournal
+from .l3_indexer import SemanticIndexer
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +81,9 @@ class CompressionWorker:
         storage_adapter: Optional[Any] = None,
         pool_id: Optional[str] = None,
         session_id: Optional[str] = None,
+        l3_indexer: Optional[SemanticIndexer] = None,
+        embedding_backend: str = "hash",
+        embedding_model: str = "text-embedding-3-small",
     ) -> None:
         self._compressor = compressor
         self._fallback_truncate = fallback_truncate
@@ -87,6 +92,9 @@ class CompressionWorker:
         self._storage_adapter = storage_adapter
         self._pool_id = pool_id
         self._session_id = session_id or "unknown_agent"
+        self._l3_indexer = l3_indexer
+        self._embedding_backend = embedding_backend
+        self._embedding_model = embedding_model
         self._queue: asyncio.Queue[CompressionTask | None] = asyncio.Queue()
         self._task: asyncio.Task | None = None
         self._running: bool = False
@@ -221,6 +229,8 @@ class CompressionWorker:
                     exc_info=True,
                 )
 
+            chunks_indexed = await self._index_l3_semantic(state, messages_text, cycle_id)
+
             # 6. Emit existing L2SummaryGeneratedEvent and CompressionCycleCompleteEvent
             if self._event_bus:
                 asyncio.create_task(
@@ -260,7 +270,8 @@ class CompressionWorker:
             logger.info(
                 f"CompressionWorker: compressed {len(task.messages)} messages → "
                 f"narrative ({len(narrative)} chars), "
-                f"{len(combined_entities)} entities extracted (cycle {cycle_id})."
+                f"{len(combined_entities)} entities extracted, "
+                f"{chunks_indexed} L3 chunk(s) indexed (cycle {cycle_id})."
             )
 
         except (OllamaConnectionError, CompressionError) as exc:
@@ -354,6 +365,56 @@ class CompressionWorker:
             )
 
         await adapter.save_pool_state(pool_id, shared_entities, shared_archive)
+
+    async def _index_l3_semantic(
+        self,
+        state: MemoryState,
+        messages_text: str,
+        cycle_id: str,
+    ) -> int:
+        """Index evicted L1 text into L3 semantic vector storage."""
+        indexer = self._l3_indexer
+        if not indexer or not messages_text.strip():
+            return 0
+
+        try:
+            chunks_indexed = await indexer.index(
+                self._session_id, messages_text, state
+            )
+        except Exception as exc:
+            logger.warning(
+                "CompressionWorker: L3 semantic indexing failed (%s).",
+                exc,
+                exc_info=True,
+            )
+            return 0
+
+        if chunks_indexed and self._storage_adapter:
+            try:
+                await self._storage_adapter.save_state(self._session_id, state)
+            except Exception as exc:
+                logger.warning(
+                    "CompressionWorker: failed to persist L3 metadata (%s).",
+                    exc,
+                    exc_info=True,
+                )
+
+        if chunks_indexed and self._event_bus:
+            asyncio.create_task(
+                self._event_bus.emit(
+                    L3VectorIndexedEvent(
+                        session_id=self._session_id,
+                        cycle_id=cycle_id,
+                        chunks_indexed=chunks_indexed,
+                        total_chunks=state.l3_semantic.chunk_count,
+                        source_chars=len(messages_text),
+                        embedding_backend=self._embedding_backend,
+                        embedding_model=self._embedding_model,
+                    )
+                )
+            )
+
+        return chunks_indexed
 
     # ------------------------------------------------------------------
     # Helpers

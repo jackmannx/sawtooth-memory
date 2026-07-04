@@ -8,7 +8,7 @@ Public API:
     ContextManager       — Main middleware class
     ContextManagerConfig — Configuration (token limits, Ollama settings)
     OllamaConfig         — Ollama-specific connection settings
-    MemoryState          — The four-tier state object (read access)
+    MemoryState          — The five-tier state object (L0–L3; read access)
     SawtoothError        — Base exception
 
 Example:
