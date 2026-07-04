@@ -2,10 +2,12 @@
 state.py — Pydantic v2 schemas for Sawtooth-Memory's tiered context model.
 
 Tiers:
-  L0  — SystemPrompt     : Immutable. Agent persona + tool schemas.
-  L1  — WorkingMemory    : Mutable. Last N raw messages.
-  L1.5— EntityLedger     : KV store. Exact deterministic values (IDs, paths, etc).
-  L2  — ArchivalMemory   : Append-only. Dense narrative of compressed history.
+  L0  — SystemPrompt          : Immutable. Agent persona + tool schemas.
+  L1  — WorkingMemory         : Mutable. Last N raw messages.
+  L1.5— EntityLedger          : KV store. Exact deterministic values (IDs, paths, etc).
+  L2  — ArchivalMemory        : Append-only. Dense narrative of compressed history.
+  L3  — SemanticVectorMemory  : Metadata for pgvector-backed semantic chunks (vectors
+                                 live in the storage adapter, not in MemoryState).
 
 Event integration:
   EntityLedger can be given an optional event callback that is invoked whenever
@@ -198,10 +200,24 @@ class ArchivalMemory(BaseModel):
         self.narrative = f"{self.narrative}\n{new_text}" if self.narrative else new_text
 
 
+class SemanticVectorMemory(BaseModel):
+    """L3 — Metadata for semantic vector archival chunks.
+
+    Actual embedding vectors are persisted by a
+    :class:`~sawtooth_memory.storage.semantic.SemanticStorageAdapter`
+    (e.g. Postgres + pgvector).  This tier tracks indexing statistics
+    inside ``MemoryState`` without bloating the JSONB payload.
+    """
+
+    chunk_count: int = 0
+    last_indexed_at: Optional[datetime] = None
+
+
 class MemoryState(BaseModel):
-    """Root state object. Holds all four memory tiers."""
+    """Root state object. Holds all memory tiers (L0–L3)."""
 
     l0_system: SystemPrompt
     l1_working: WorkingMemory = Field(default_factory=WorkingMemory)
     l1_5_entities: EntityLedger = Field(default_factory=EntityLedger)
     l2_archival: ArchivalMemory = Field(default_factory=ArchivalMemory)
+    l3_semantic: SemanticVectorMemory = Field(default_factory=SemanticVectorMemory)

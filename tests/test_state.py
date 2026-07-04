@@ -163,7 +163,18 @@ class TestMemoryState:
         assert state.l1_working.messages == []
         assert state.l1_5_entities.entities == {}
         assert state.l2_archival.narrative == ""
+        assert state.l3_semantic.chunk_count == 0
+        assert state.l3_semantic.last_indexed_at is None
 
     def test_l0_content(self):
         state = MemoryState(l0_system=SystemPrompt(content="Agent persona."))
         assert state.l0_system.content == "Agent persona."
+
+
+class TestSemanticVectorMemory:
+    def test_defaults(self):
+        from sawtooth_memory.state import SemanticVectorMemory
+
+        l3 = SemanticVectorMemory()
+        assert l3.chunk_count == 0
+        assert l3.last_indexed_at is None
