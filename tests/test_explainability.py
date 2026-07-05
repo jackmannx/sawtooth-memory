@@ -120,3 +120,5 @@ async def test_explain_prompt_structure():
         assert len(trace["l1_5_entities"]) == 1
         assert trace["l1_5_entities"][0]["entity_key"] == "user_id"
         assert trace["l1_5_entities"][0]["entity_value"] == ["12345"]
+        assert "l3_semantic" in trace
+        assert trace["l3_semantic"]["in_prompt"] is False

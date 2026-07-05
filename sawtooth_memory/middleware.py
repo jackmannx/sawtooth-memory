@@ -693,4 +693,11 @@ class ContextManager:
                 report["status"] = "unhealthy"
                 report["checks"]["backend_reachable"] = f"MISSING: {exc}"
 
+        if self._config.enable_l3_semantic_storage:
+            report["checks"]["l3_semantic_storage"] = "ENABLED"
+            report["checks"]["l3_embedding_backend"] = self._config.embedding_backend
+            report["checks"]["l3_chunk_count"] = self._state.l3_semantic.chunk_count
+        else:
+            report["checks"]["l3_semantic_storage"] = "DISABLED"
+
         return report
