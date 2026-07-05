@@ -246,6 +246,7 @@ class ContextManager:
             if loaded is not None:
                 self._state.l0_system = loaded.l0_system
                 self._state.l1_working = loaded.l1_working
+                self._state.l3_semantic = loaded.l3_semantic
                 if not self._config.pool_id:
                     self._state.l1_5_entities = loaded.l1_5_entities
                     self._state.l2_archival = loaded.l2_archival
