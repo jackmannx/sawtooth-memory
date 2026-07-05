@@ -49,3 +49,24 @@ async def test_hard_truncate_indexes_l3():
     assert len(storage.vectors) == 1
     assert storage.sessions["test-session"].l3_semantic.chunk_count == 1
     assert "router" in storage.vectors[0][1].lower()
+
+
+@pytest.mark.asyncio
+async def test_embedder_closed_on_context_manager_stop():
+    from unittest.mock import AsyncMock, patch
+
+    storage = InMemorySemanticStorage(embedding_dimension=64)
+    config = make_l3_config(storage)
+
+    mock_close = AsyncMock()
+    with patch(
+        "sawtooth_memory.middleware.create_embedding_provider",
+    ) as mock_factory:
+        embedder = AsyncMock()
+        embedder.close = mock_close
+        mock_factory.return_value = embedder
+
+        async with ContextManager("sys", config=config, enable_events=False):
+            pass
+
+    mock_close.assert_awaited_once()

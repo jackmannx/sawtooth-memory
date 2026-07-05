@@ -260,6 +260,8 @@ class ContextManager:
 
     async def stop(self) -> None:
         await self._worker.stop()
+        if self._embedder is not None and hasattr(self._embedder, "close"):
+            await self._embedder.close()
         if self._enable_events and self._journal:
             await self._journal.stop()  # Stops just this agent's journal instance
         if self._enable_events and self._event_bus:
