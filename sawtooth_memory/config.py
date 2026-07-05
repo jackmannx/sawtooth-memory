@@ -224,3 +224,40 @@ class ContextManagerConfig(BaseModel):
                 self.ollama = OllamaConfig(model=self.background_model)
 
         return self
+
+    @model_validator(mode="after")
+    def __validate_l3_semantic_storage__(self) -> "ContextManagerConfig":
+        """Ensure L3 is only enabled with a compatible semantic storage backend."""
+        if not self.enable_l3_semantic_storage:
+            return self
+
+        if self.storage_adapter is None:
+            raise ValueError(
+                "enable_l3_semantic_storage=True requires storage_adapter "
+                "(PostgresStorageAdapter with pgvector)."
+            )
+
+        from .storage.semantic import supports_semantic_storage
+
+        if not supports_semantic_storage(self.storage_adapter):
+            raise ValueError(
+                "enable_l3_semantic_storage=True requires a SemanticStorageAdapter "
+                "(e.g. PostgresStorageAdapter). RedisStorageAdapter does not support L3."
+            )
+
+        adapter_dim = getattr(self.storage_adapter, "embedding_dimension", None)
+        if adapter_dim is not None and adapter_dim != self.embedding_dimension:
+            raise ValueError(
+                f"embedding_dimension ({self.embedding_dimension}) must match "
+                f"storage_adapter.embedding_dimension ({adapter_dim})."
+            )
+
+        if self.embedding_backend not in ("hash", "openai"):
+            raise ValueError(
+                f"embedding_backend must be 'hash' or 'openai', got {self.embedding_backend!r}."
+            )
+
+        if self.l3_chunk_max_chars < 1:
+            raise ValueError("l3_chunk_max_chars must be positive.")
+
+        return self

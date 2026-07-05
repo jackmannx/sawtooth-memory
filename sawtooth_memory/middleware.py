@@ -45,7 +45,7 @@ from .events.types import (
 from .journal import AsyncCompressionJournal
 from .embeddings.factory import create_embedding_provider
 from .l3_indexer import SemanticIndexer
-from .storage.semantic import SemanticChunkResult, supports_semantic_storage
+from .storage.semantic import SemanticChunkResult
 
 logger = logging.getLogger(__name__)
 
@@ -200,16 +200,15 @@ class ContextManager:
             self._compressor = OllamaCompressor(ollama_cfg)
 
         self._l3_indexer: SemanticIndexer | None = None
-        if (
-            self._config.enable_l3_semantic_storage
-            and self._config.storage_adapter
-            and supports_semantic_storage(self._config.storage_adapter)
-        ):
+        self._embedder: Any = None
+        if self._config.enable_l3_semantic_storage:
+            # Config validator guarantees semantic storage when L3 is enabled.
             embedder = create_embedding_provider(
                 self._config.embedding_backend,  # type: ignore[arg-type]
                 model=self._config.embedding_model,
                 dimension=self._config.embedding_dimension,
             )
+            self._embedder = embedder
             self._l3_indexer = SemanticIndexer(
                 storage=self._config.storage_adapter,
                 embedder=embedder,

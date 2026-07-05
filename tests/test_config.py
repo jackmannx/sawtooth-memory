@@ -79,3 +79,25 @@ class TestResolveCloudApiKey:
         monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
         monkeypatch.setenv("GEMINI_API_KEY", "gem-test")
         assert resolve_cloud_api_key(Provider.GEMINI) == "gem-test"
+
+
+class TestL3ConfigValidation:
+    def test_l3_requires_semantic_storage_when_enabled(self):
+        from tests.l3_helpers import InMemorySemanticStorage
+
+        with pytest.raises(ValueError, match="requires storage_adapter"):
+            ContextManagerConfig(enable_l3_semantic_storage=True)
+
+        with pytest.raises(ValueError, match="SemanticStorageAdapter"):
+            ContextManagerConfig(
+                enable_l3_semantic_storage=True,
+                storage_adapter=object(),
+            )
+
+        storage = InMemorySemanticStorage(embedding_dimension=128)
+        with pytest.raises(ValueError, match="embedding_dimension"):
+            ContextManagerConfig(
+                enable_l3_semantic_storage=True,
+                storage_adapter=storage,
+                embedding_dimension=64,
+            )
