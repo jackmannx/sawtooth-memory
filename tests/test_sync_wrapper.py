@@ -93,3 +93,35 @@ def test_sync_wrapper_explainability(tmp_path: Path):
         assert trace["l0_system"]["content"] == "Explainability Test Sync"
         assert trace["l1_working_messages"] == 0
         assert isinstance(trace["l1_5_entities"], list)
+        assert "l3_semantic" in trace
+
+
+def test_sync_wrapper_l3_search_and_count():
+    """Verify L3 retrieval APIs are exposed through the sync wrapper."""
+    from tests.l3_helpers import InMemorySemanticStorage, make_l3_config
+
+    storage = InMemorySemanticStorage(embedding_dimension=64)
+    config = make_l3_config(storage)
+
+    with SawtoothSyncWrapper(
+        system_prompt="L3 sync test",
+        config=config,
+        enable_events=False,
+    ) as memory:
+        portal = memory._portal
+        cm = memory._cm
+        assert portal is not None and cm is not None
+
+        async def _index() -> None:
+            await cm._worker.index_l3_semantic(
+                cm.state,
+                "USER: Sync wrapper semantic archive content.",
+                "sync-cycle",
+            )
+
+        portal.call(_index)
+
+        results = memory.search_semantic_archive("semantic archive", top_k=1)
+        assert len(results) == 1
+        assert "semantic" in results[0].text.lower()
+        assert memory.l3_chunk_count() == 1

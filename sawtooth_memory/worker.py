@@ -293,6 +293,7 @@ class CompressionWorker:
 
             if self._fallback_truncate:
                 self._fallback_merge(state, task.messages)
+                await self._index_l3_semantic(state, messages_text, cycle_id)
             else:
                 raise
 
@@ -415,6 +416,15 @@ class CompressionWorker:
             )
 
         return chunks_indexed
+
+    async def index_l3_semantic(
+        self,
+        state: MemoryState,
+        messages_text: str,
+        cycle_id: str,
+    ) -> int:
+        """Public entry point for L3 indexing (used by ContextManager hard-truncate)."""
+        return await self._index_l3_semantic(state, messages_text, cycle_id)
 
     # ------------------------------------------------------------------
     # Helpers

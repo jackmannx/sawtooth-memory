@@ -13,6 +13,7 @@ from anyio.from_thread import start_blocking_portal, BlockingPortal
 from .config import ContextManagerConfig
 from .middleware import ContextManager
 from .state import MessageRole
+from .storage.semantic import SemanticChunkResult
 
 
 class SawtoothSyncWrapper:
@@ -126,6 +127,35 @@ class SawtoothSyncWrapper:
             return cm.explain_prompt()
 
         return portal.call(_safe_explain)
+
+    def search_semantic_archive(
+        self, query: str, top_k: int = 5
+    ) -> List[SemanticChunkResult]:
+        """Retrieve L3 semantic chunks similar to *query* (storage-layer API)."""
+        cm = self._cm
+        portal = self._portal
+
+        if not portal or not cm:
+            raise RuntimeError(
+                "SawtoothSyncWrapper must be used within a 'with' context."
+            )
+
+        async def _safe_search() -> List[SemanticChunkResult]:
+            return await cm.search_semantic_archive(query, top_k)
+
+        return portal.call(_safe_search)
+
+    def l3_chunk_count(self) -> int:
+        """Return the number of indexed L3 semantic chunks for this session."""
+        cm = self._cm
+        portal = self._portal
+
+        if not portal or not cm:
+            raise RuntimeError(
+                "SawtoothSyncWrapper must be used within a 'with' context."
+            )
+
+        return portal.call(cm.l3_chunk_count)
 
     # ------------------------------------------------------------------
     # Observability Proxies
