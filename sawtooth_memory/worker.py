@@ -293,6 +293,7 @@ class CompressionWorker:
 
             if self._fallback_truncate:
                 self._fallback_merge(state, task.messages)
+                await self._index_l3_semantic(state, messages_text, cycle_id)
             else:
                 raise
 

@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from sawtooth_memory.embeddings.hash import HashEmbeddingProvider
+from sawtooth_memory.exceptions import CompressionError
 from sawtooth_memory.l3_indexer import SemanticIndexer
 from sawtooth_memory.state import MemoryState, Message, SystemPrompt
 from sawtooth_memory.worker import CompressionTask, CompressionWorker
@@ -85,3 +86,32 @@ async def test_worker_skips_l3_when_indexer_disabled(mock_compressor):
     await worker._process(task)
 
     assert state.l3_semantic.chunk_count == 0
+
+
+@pytest.mark.asyncio
+async def test_worker_indexes_l3_on_compression_fallback(mock_compressor, semantic_storage):
+    mock_compressor.compress = AsyncMock(side_effect=CompressionError("provider down"))
+
+    embedder = HashEmbeddingProvider(dimension=64)
+    indexer = SemanticIndexer(semantic_storage, embedder, chunk_max_chars=500)
+
+    worker = CompressionWorker(
+        compressor=mock_compressor,
+        fallback_truncate=True,
+        l3_indexer=indexer,
+        storage_adapter=semantic_storage,
+        session_id="agent-1",
+        enable_deterministic_ner=False,
+    )
+
+    state = MemoryState(l0_system=SystemPrompt(content="sys"))
+    task = CompressionTask(
+        messages=[Message(role="user", content="Salvage this text on fallback.")],
+        state=state,
+        cycle_id="fallback-1",
+    )
+
+    await worker._process(task)
+
+    semantic_storage.upsert_vector_chunks_batch.assert_awaited_once()
+    assert state.l3_semantic.chunk_count == 1
