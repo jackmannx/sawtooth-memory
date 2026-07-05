@@ -35,7 +35,7 @@ from .state import (
     SystemPrompt,
     WorkingMemory,
 )
-from .worker import CompressionWorker, CompressionTask
+from .worker import CompressionWorker, CompressionTask, _messages_to_text
 from .events.bus import EventBus, get_event_bus
 from .events.types import (
     CompressionCycleStartEvent,
@@ -313,7 +313,7 @@ class ContextManager:
                 "Hard token limit reached before compression finished. "
                 "Forcing immediate truncation of oldest messages."
             )
-            self._force_truncate()
+            await self._force_truncate()
 
         # Soft limit & Turn count batching check (Debounced) → trigger async compression
         elif self._monitor.should_trigger_compression(self._state):
@@ -556,16 +556,30 @@ class ContextManager:
             f"cycle_id={cycle_id}"
         )
 
-    def _force_truncate(self) -> None:
+    async def _force_truncate(self) -> None:
         """
         Hard-limit fallback: discard the oldest messages immediately on
         the main thread without waiting for Ollama/Cloud.
 
-        Note: This does NOT emit events because it's a fallback path
-        and not a full compression cycle. The journal remains
-        unaffected (only complete cycles are logged).
+        When L3 is enabled, evicted text is still indexed into semantic
+        storage so retrieval remains possible after truncation.
+
+        Note: This does NOT emit compression cycle events because it's a
+        fallback path. The journal remains unaffected.
         """
         chunk = self._state.l1_working.slice_oldest(self._config.chunk_size)
+        if not chunk:
+            return
+
+        if self._l3_indexer:
+            import uuid
+
+            messages_text = _messages_to_text(chunk)
+            cycle_id = f"hard-truncate-{uuid.uuid4()}"
+            await self._worker.index_l3_semantic(
+                self._state, messages_text, cycle_id
+            )
+
         note = (
             f"[HARD TRUNCATION: {len(chunk)} messages dropped because the "
             f"compression worker has not yet caught up.]"

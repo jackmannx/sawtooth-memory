@@ -27,3 +27,25 @@ async def test_l3_semantic_metadata_restored_on_session_reload():
     async with ContextManager("sys", config=config, enable_events=False) as cm:
         assert cm.state.l3_semantic.chunk_count == 7
         assert cm.state.l3_semantic.last_indexed_at is not None
+
+
+@pytest.mark.asyncio
+async def test_hard_truncate_indexes_l3():
+    from unittest.mock import patch
+
+    storage = InMemorySemanticStorage(embedding_dimension=64)
+    config = make_l3_config(storage, hard_limit_tokens=30, chunk_size=1)
+
+    async with ContextManager("sys", config=config, enable_events=False) as cm:
+        with patch.object(cm._monitor, "exceeds_hard_limit", return_value=True):
+            with patch.object(
+                cm._monitor, "should_trigger_compression", return_value=False
+            ):
+                await cm.add_message(
+                    "user",
+                    "Critical router diagnostics payload that must survive truncation.",
+                )
+
+    assert len(storage.vectors) == 1
+    assert storage.sessions["test-session"].l3_semantic.chunk_count == 1
+    assert "router" in storage.vectors[0][1].lower()
