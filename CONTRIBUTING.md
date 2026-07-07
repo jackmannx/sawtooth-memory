@@ -21,3 +21,9 @@ We use `pyproject.toml` to manage package configurations and dependencies. To ge
    ```bash
    pip install -e ".[dev,langgraph,redis]"
    ```
+3. **Install pre-commit hooks** (recommended):
+   ```bash
+   pip install pre-commit ruff
+   pre-commit install
+   ```
+   This enables automatic formatting and linting via ruff, mypy, and basic file checks before each commit.
