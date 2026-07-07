@@ -14,9 +14,16 @@ import logging
 import re
 
 import httpx
+from tenacity import (
+    retry,
+    retry_if_exception,
+    stop_after_attempt,
+    wait_exponential,
+)
 
-from sawtooth_memory.config import OllamaConfig
+from sawtooth_memory.config import CloudConfig, OllamaConfig
 from sawtooth_memory.exceptions import CompressionError, OllamaConnectionError
+from sawtooth_memory.providers import ProviderAdapter, get_adapter
 
 logger = logging.getLogger(__name__)
 
@@ -203,19 +210,6 @@ class OllamaCompressor:
 # ---------------------------------------------------------------------------
 # Cloud compressor
 # ---------------------------------------------------------------------------
-
-import asyncio
-
-import httpx
-from tenacity import (
-    retry,
-    retry_if_exception,
-    stop_after_attempt,
-    wait_exponential,
-)
-
-from sawtooth_memory.config import CloudConfig
-from sawtooth_memory.providers import ProviderAdapter, get_adapter
 
 
 def _is_rate_limit(exc: BaseException) -> bool:
