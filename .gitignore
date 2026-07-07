@@ -58,4 +58,7 @@ coverage.xml
 
 # Project specific logs or local data
 *.log
+.sawtooth_journal.jsonl
+.sawtooth_journal.*.jsonl.bak
 sawtooth_compression_journal.jsonl
+sawtooth_compression_journal.*.jsonl.bak
