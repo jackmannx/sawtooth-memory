@@ -146,9 +146,7 @@ class ContextManager:
             soft_limit=self._config.soft_limit_tokens,
             hard_limit=self._config.hard_limit_tokens,
             # pass the batching threshold if it exists in the config
-            max_unsummarized_turns=getattr(
-                self._config, "max_unsummarized_turns", None
-            ),
+            max_unsummarized_turns=self._config.max_unsummarized_turns,
             event_bus=self._event_bus,
         )
 

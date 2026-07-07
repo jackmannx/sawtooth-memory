@@ -183,7 +183,7 @@ class CompressionWorker:
         state = task.state
         messages_text = _messages_to_text(task.messages)
         cycle_id = task.cycle_id
-        start_time = asyncio.get_event_loop().time()
+        start_time = asyncio.get_running_loop().time()
 
         try:
             # 1. Run local deterministic regex extraction
@@ -193,7 +193,7 @@ class CompressionWorker:
 
             # 2. Execute background LLM compression wave as normal
             result = await self._compressor.compress(messages_text)
-            duration_ms = int((asyncio.get_event_loop().time() - start_time) * 1000)
+            duration_ms = int((asyncio.get_running_loop().time() - start_time) * 1000)
 
             narrative = result.get("narrative_summary", "").strip()
             llm_entities = result.get("extracted_entities", {})
