@@ -1,6 +1,6 @@
 """Tests for L3 integration in CompressionWorker."""
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 

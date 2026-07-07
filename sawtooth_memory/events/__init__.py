@@ -1,5 +1,5 @@
 from .bus import EventBus, get_event_bus, reset_event_bus
-from .handlers import make_journal_handler, console_logger
+from .handlers import console_logger, make_journal_handler
 from .types import (
     CompressionCycleCompleteEvent,
     CompressionCycleFailedEvent,

@@ -14,8 +14,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from langchain_core.messages import (
     AIMessage,
-    HumanMessage,
     BaseMessage,
+    HumanMessage,
     SystemMessage,
     ToolMessage,
 )
@@ -25,7 +25,6 @@ from sawtooth_memory.integrations.langgraph.adapter import (
     _extract_content,
     _msg_id,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers

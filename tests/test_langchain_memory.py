@@ -5,7 +5,9 @@ Verifies the modern LCEL BaseChatMessageHistory adapter mechanics.
 """
 
 from pathlib import Path
+
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+
 from sawtooth_memory.config import ContextManagerConfig
 from sawtooth_memory.integrations.langchain_adapter import SawtoothChatMessageHistory
 

@@ -7,7 +7,10 @@ modern LCEL Runnables, LangGraph, and standard Agent executors.
 
 from pathlib import Path
 from typing import List, Optional, Sequence
-from langchain_core.chat_history import BaseChatMessageHistory  # type: ignore[import-not-found]
+
+from langchain_core.chat_history import (
+    BaseChatMessageHistory,  # type: ignore[import-not-found]
+)
 from langchain_core.messages import (  # type: ignore[import-not-found]
     AIMessage,
     BaseMessage,

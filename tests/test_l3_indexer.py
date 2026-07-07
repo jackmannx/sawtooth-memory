@@ -1,6 +1,6 @@
 """Tests for L3 text chunking and SemanticIndexer."""
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 

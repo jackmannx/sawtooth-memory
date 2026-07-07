@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 import tiktoken
 
@@ -23,17 +23,17 @@ from .state import MemoryState, Message
 if TYPE_CHECKING:
     from .events.bus import EventBus
     from .events.types import (
-        SoftLimitReachedEvent,
         HardLimitReachedEvent,
         SawtoothEvent,
+        SoftLimitReachedEvent,
     )
 else:
     try:
         from .events.bus import EventBus
         from .events.types import (
-            SoftLimitReachedEvent,
             HardLimitReachedEvent,
             SawtoothEvent,
+            SoftLimitReachedEvent,
         )
     except ImportError:
         # Fallback: define dummy types when event system is not installed

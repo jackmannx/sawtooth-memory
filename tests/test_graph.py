@@ -18,12 +18,11 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from sawtooth_memory.integrations.langgraph.adapter import SawtoothLangGraphAdapter
 from sawtooth_memory.integrations.langgraph.graph import (
     AgentState,
+    _is_transient_error,
     build_sawtooth_graph,
     make_compression_node,
     make_llm_node,
-    _is_transient_error,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -125,7 +124,8 @@ class TestCompressionNode:
         }
         result = await node(state)
 
-        from langchain_core.messages import SystemMessage, HumanMessage as HM
+        from langchain_core.messages import HumanMessage as HM
+        from langchain_core.messages import SystemMessage
 
         assert isinstance(result["llm_context"][0], SystemMessage)
         assert isinstance(result["llm_context"][1], HM)

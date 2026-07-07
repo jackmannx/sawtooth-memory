@@ -8,7 +8,8 @@ Utilizes AnyIO's BlockingPortal to bridge the sync/async boundary securely.
 
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from anyio.from_thread import start_blocking_portal, BlockingPortal
+
+from anyio.from_thread import BlockingPortal, start_blocking_portal
 
 from .config import ContextManagerConfig
 from .middleware import ContextManager

@@ -20,20 +20,19 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Union
 
-from .ner import NERPipeline, active_strategy_context
-from .compressor import OllamaCompressor, CloudCompressor
-from .exceptions import CompressionError, OllamaConnectionError
-from .state import ArchivalMemory, EntityLedger, MemoryState, Message
-
+from .compressor import CloudCompressor, OllamaCompressor
 from .events.bus import EventBus
 from .events.types import (
-    L2SummaryGeneratedEvent,
-    L3VectorIndexedEvent,
     CompressionCycleCompleteEvent,
     CompressionCycleFailedEvent,
+    L2SummaryGeneratedEvent,
+    L3VectorIndexedEvent,
 )
+from .exceptions import CompressionError, OllamaConnectionError
 from .journal import AsyncCompressionJournal
 from .l3_indexer import SemanticIndexer
+from .ner import NERPipeline, active_strategy_context
+from .state import ArchivalMemory, EntityLedger, MemoryState, Message
 
 logger = logging.getLogger(__name__)
 

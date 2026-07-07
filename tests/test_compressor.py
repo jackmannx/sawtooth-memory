@@ -7,7 +7,7 @@ import pytest
 
 from sawtooth_memory.compressor import OllamaCompressor, _prune
 from sawtooth_memory.config import OllamaConfig
-from sawtooth_memory.exceptions import CompressionError, OllamaConnectionError
+from sawtooth_memory.exceptions import OllamaConnectionError
 
 
 @pytest.fixture

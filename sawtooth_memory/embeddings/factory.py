@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import Literal, Optional
 
-from ..config import resolve_cloud_api_key, Provider
+from ..config import Provider, resolve_cloud_api_key
 from .base import EmbeddingProvider
 from .hash import HashEmbeddingProvider
 from .openai import OpenAIEmbeddingProvider

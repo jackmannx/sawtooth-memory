@@ -204,9 +204,7 @@ class OllamaCompressor:
 # Cloud compressor
 # ---------------------------------------------------------------------------
 
-import asyncio
 
-import httpx
 from tenacity import (
     retry,
     retry_if_exception,

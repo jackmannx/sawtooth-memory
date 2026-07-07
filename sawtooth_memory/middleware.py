@@ -22,9 +22,19 @@ Quick start:
 import logging
 from pathlib import Path
 from typing import Any, Literal, Optional
-from .config import ContextManagerConfig
+
 from .compressor import CloudCompressor, OllamaCompressor
+from .config import ContextManagerConfig
+from .embeddings.factory import create_embedding_provider
+from .events.bus import EventBus, get_event_bus
+from .events.types import (
+    CompressionCycleStartEvent,
+    EntityAnchoredEvent,
+    L1EvictionEvent,
+)
 from .exceptions import TokenLimitExceededError
+from .journal import AsyncCompressionJournal
+from .l3_indexer import SemanticIndexer
 from .monitor import TokenMonitor
 from .state import (
     ArchivalMemory,
@@ -35,17 +45,8 @@ from .state import (
     SystemPrompt,
     WorkingMemory,
 )
-from .worker import CompressionWorker, CompressionTask, _messages_to_text
-from .events.bus import EventBus, get_event_bus
-from .events.types import (
-    CompressionCycleStartEvent,
-    EntityAnchoredEvent,
-    L1EvictionEvent,
-)
-from .journal import AsyncCompressionJournal
-from .embeddings.factory import create_embedding_provider
-from .l3_indexer import SemanticIndexer
 from .storage.semantic import SemanticChunkResult
+from .worker import CompressionTask, CompressionWorker, _messages_to_text
 
 logger = logging.getLogger(__name__)
 
@@ -117,8 +118,9 @@ class ContextManager:
 
             # 2. Bind a dedicated, lightweight handler for Entity Anchoring events
             # This safely writes the OOP schema to the JSONL file without crashing on strict dataclass fields.
-            import aiofiles
             import json
+
+            import aiofiles
 
             async def entity_journal_handler(event: EntityAnchoredEvent) -> None:
                 record = {

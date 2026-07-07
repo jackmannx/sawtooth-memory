@@ -1,4 +1,5 @@
 import pytest
+
 from sawtooth_memory.config import ContextManagerConfig
 from sawtooth_memory.middleware import ContextManager, _extract_entity_event
 

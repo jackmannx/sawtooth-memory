@@ -1,13 +1,14 @@
 """Async JSONL journal for compression cycles – fully non-blocking."""
 
-import json
-import aiofiles
 import asyncio
-from pathlib import Path
-from datetime import datetime, timezone
-from typing import Dict, Any, Optional, List
-from dataclasses import dataclass, asdict
+import json
 import logging
+from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+import aiofiles
 
 logger = logging.getLogger(__name__)
 

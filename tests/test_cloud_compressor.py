@@ -17,8 +17,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-from sawtooth_memory.config import CloudConfig, Provider
 from sawtooth_memory.compressor import CloudCompressor
+from sawtooth_memory.config import CloudConfig, Provider
 from sawtooth_memory.exceptions import CompressionError
 from sawtooth_memory.providers import (
     AnthropicAdapter,

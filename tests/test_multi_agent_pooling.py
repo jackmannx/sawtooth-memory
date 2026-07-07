@@ -12,9 +12,9 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from sawtooth_memory.config import ContextManagerConfig
+from sawtooth_memory.middleware import ContextManager
 from sawtooth_memory.state import ArchivalMemory, EntityLedger, MemoryState
 from sawtooth_memory.storage.base import BaseStorageAdapter
-from sawtooth_memory.middleware import ContextManager
 
 
 class MockRedisStorageAdapter(BaseStorageAdapter):

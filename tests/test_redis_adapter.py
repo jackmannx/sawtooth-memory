@@ -5,8 +5,9 @@ Validates the RedisStorageAdapter serialization, deserialization, and
 state management using asynchronous mocks.
 """
 
-import pytest
 from unittest.mock import AsyncMock, patch
+
+import pytest
 
 from sawtooth_memory.state import (
     ArchivalMemory,
