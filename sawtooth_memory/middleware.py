@@ -106,7 +106,8 @@ class ContextManager:
             self._event_bus = get_event_bus()
 
             # Localize the journal instance to this ContextManager
-            j_path = journal_path or Path("./sawtooth_compression_journal.jsonl")
+            j_path = journal_path or Path(self._config.journal_path)
+            self._journal_path = j_path
             self._journal = AsyncCompressionJournal(j_path)
 
             from .events.handlers import make_journal_handler
