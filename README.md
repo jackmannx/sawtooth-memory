@@ -105,8 +105,8 @@ pip install sawtooth-memory
 _Optional dependencies:_
 
 ```bash
-# Cloud compression providers (install the SDK you use)
-pip install langchain-openai langchain-anthropic langchain-google-genai
+# Cloud compression uses httpx directly — set API keys via environment variables
+# (OPENAI_API_KEY, ANTHROPIC_API_KEY, GOOGLE_API_KEY)
 
 # LangChain message history adapter
 pip install sawtooth-memory[langchain]
