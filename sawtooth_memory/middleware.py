@@ -220,7 +220,6 @@ class ContextManager:
             compressor=self._compressor,
             fallback_truncate=self._config.fallback_truncate,
             event_bus=self._event_bus,
-            journal=self._journal,
             enable_deterministic_ner=self._config.enable_deterministic_ner,
             custom_ner_patterns=self._config.custom_ner_patterns,
             storage_adapter=self._config.storage_adapter,
