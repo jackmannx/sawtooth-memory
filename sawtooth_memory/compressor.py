@@ -9,7 +9,6 @@ Handles:
 
 from __future__ import annotations
 
-import json
 import logging
 import re
 
@@ -21,42 +20,17 @@ from tenacity import (
     wait_exponential,
 )
 
+from sawtooth_memory.compression_utils import (
+    COMPRESSION_SYSTEM_PROMPT,
+    normalize_compression_result,
+    parse_compression_json,
+)
+from sawtooth_memory.config import OllamaConfig
 from sawtooth_memory.config import CloudConfig, OllamaConfig
 from sawtooth_memory.exceptions import CompressionError, OllamaConnectionError
 from sawtooth_memory.providers import ProviderAdapter, get_adapter
 
 logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# Compression system prompt
-# ---------------------------------------------------------------------------
-
-_SYSTEM_PROMPT = """\
-You are a memory compression engine for an AI agent system.
-
-Your job:
-1. Read the conversational logs provided.
-2. Write a dense, chronological NARRATIVE of what the agent decided, discovered, \
-and accomplished. Be specific. Preserve causality (why things happened).
-3. Extract all EXACT DETERMINISTIC VALUES into a flat key-value dictionary. \
-This includes: UUIDs, database IDs, file paths, connection strings, precise \
-numeric results, API endpoints, and any other value that must be reproduced \
-exactly in future tool calls.
-
-Rules:
-- IGNORE errors/exceptions if they were subsequently resolved.
-- Do NOT include verbose JSON payloads or base64 strings.
-- Use snake_case keys in extracted_entities.
-- Respond ONLY with valid JSON. No preamble, no markdown fences, no extra text.
-
-Required output schema:
-{
-  "narrative_summary": "<dense chronological narrative as a single string>",
-  "extracted_entities": {
-    "<key>": "<exact_value>"
-  }
-}
-"""
 
 # ---------------------------------------------------------------------------
 # Pre-processing regexes
@@ -143,7 +117,7 @@ class OllamaCompressor:
             "model": self._config.model,
             "stream": False,
             "messages": [
-                {"role": "system", "content": _SYSTEM_PROMPT},
+                {"role": "system", "content": COMPRESSION_SYSTEM_PROMPT},
                 {
                     "role": "user",
                     "content": f"Compress the following context logs:\n\n{pruned}",
@@ -175,36 +149,9 @@ class OllamaCompressor:
         return self._parse_output(raw_content)
 
     def _parse_output(self, content: str) -> dict:
-        """
-        Parse the model's JSON output. Applies light cleanup to handle
-        common model quirks (markdown fences, leading text).
-        """
-        cleaned = re.sub(r"```(?:json)?\s*", "", content).strip()
-
-        try:
-            result = json.loads(cleaned)
-        except json.JSONDecodeError:
-            match = re.search(r"\{.*\}", cleaned, re.DOTALL)
-            if match:
-                try:
-                    result = json.loads(match.group())
-                except json.JSONDecodeError:
-                    logger.warning(
-                        "OllamaCompressor: could not parse model output as JSON; "
-                        "storing raw text as narrative."
-                    )
-                    return {"narrative_summary": content, "extracted_entities": {}}
-            else:
-                return {"narrative_summary": content, "extracted_entities": {}}
-
-        narrative = result.get("narrative_summary", "")
-        entities = result.get("extracted_entities", {})
-
-        if not isinstance(entities, dict):
-            entities = {}
-        entities = {str(k): str(v) for k, v in entities.items()}
-
-        return {"narrative_summary": narrative, "extracted_entities": entities}
+        """Parse the model's JSON output with common model-quirk fallbacks."""
+        parsed = parse_compression_json(content)
+        return normalize_compression_result(parsed, raw_fallback=content)
 
 
 # ---------------------------------------------------------------------------
@@ -297,7 +244,7 @@ class CloudCompressor:
         content = f"Compress the following context logs:\n\n{pruned}"
         payload = self._adapter.build_payload(
             model=self._config.model,
-            system_prompt=_SYSTEM_PROMPT,
+            system_prompt=COMPRESSION_SYSTEM_PROMPT,
             content=content,
         )
         headers = self._adapter.build_headers(
@@ -366,19 +313,7 @@ class CloudCompressor:
     # ------------------------------------------------------------------
 
     def _normalise(self, parsed: dict, total_tokens: int) -> dict:
-        """
-        Coerce parsed JSON into the canonical return shape, mirroring
-        the OllamaCompressor contract plus a ``total_tokens`` field.
-        """
-        narrative = parsed.get("narrative_summary", "")
-        entities = parsed.get("extracted_entities", {})
-
-        if not isinstance(entities, dict):
-            entities = {}
-        entities = {str(k): str(v) for k, v in entities.items()}
-
-        return {
-            "narrative_summary": narrative,
-            "extracted_entities": entities,
-            "total_tokens": total_tokens,
-        }
+        """Coerce parsed JSON into the canonical return shape."""
+        result = normalize_compression_result(parsed)
+        result["total_tokens"] = total_tokens
+        return result
