@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from sawtooth_memory.compressor import OllamaCompressor, _prune
-from sawtooth_memory.exceptions import CompressionError, OllamaConnectionError
+from sawtooth_memory.exceptions import OllamaConnectionError
 
 
 @pytest.fixture

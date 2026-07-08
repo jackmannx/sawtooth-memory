@@ -1,5 +1,6 @@
 """conftest.py — Shared pytest configuration."""
 
+import pytest
 
 from sawtooth_memory.config import ContextManagerConfig, OllamaConfig
 from sawtooth_memory.events.bus import reset_event_bus

@@ -28,6 +28,7 @@ from .events.types import (
     L2SummaryGeneratedEvent,
     L3VectorIndexedEvent,
 )
+from .exceptions import CompressionError, OllamaConnectionError
 from .l3_indexer import SemanticIndexer
 from .ner import NERPipeline, active_strategy_context
 from .state import ArchivalMemory, EntityLedger, MemoryState, Message
