@@ -25,7 +25,6 @@ from sawtooth_memory.compression_utils import (
     normalize_compression_result,
     parse_compression_json,
 )
-from sawtooth_memory.config import OllamaConfig
 from sawtooth_memory.config import CloudConfig, OllamaConfig
 from sawtooth_memory.exceptions import CompressionError, OllamaConnectionError
 from sawtooth_memory.providers import ProviderAdapter, get_adapter

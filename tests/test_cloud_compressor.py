@@ -17,6 +17,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
+from sawtooth_memory.compression_utils import parse_compression_json
 from sawtooth_memory.compressor import CloudCompressor
 from sawtooth_memory.config import CloudConfig, Provider
 from sawtooth_memory.exceptions import CompressionError
@@ -26,7 +27,6 @@ from sawtooth_memory.providers import (
     OpenAIAdapter,
     ProviderAdapter,
 )
-from sawtooth_memory.providers.adapters import _safe_parse_json
 from sawtooth_memory.providers.factory import get_adapter
 
 # ---------------------------------------------------------------------------
@@ -89,26 +89,26 @@ def _mock_response(body: dict, status_code: int = 200) -> MagicMock:
 
 
 # ===========================================================================
-# 1.  _safe_parse_json (fallback defence)
+# 1.  parse_compression_json (fallback defence)
 # ===========================================================================
 
 class TestSafeParseJson:
     def test_clean_json(self):
-        result = _safe_parse_json(CLEAN_JSON)
+        result = parse_compression_json(CLEAN_JSON)
         assert result["narrative_summary"] == NARRATIVE
 
     def test_markdown_fenced_json(self):
-        result = _safe_parse_json(FENCED_JSON)
+        result = parse_compression_json(FENCED_JSON)
         assert result["narrative_summary"] == NARRATIVE
 
     def test_json_with_preamble_falls_back_to_brace_search(self):
         raw = "Here is the result:\n" + CLEAN_JSON
-        result = _safe_parse_json(raw)
+        result = parse_compression_json(raw)
         assert result["narrative_summary"] == NARRATIVE
 
     def test_total_garbage_returns_raw_as_narrative(self):
         raw = "This is definitely not JSON."
-        result = _safe_parse_json(raw)
+        result = parse_compression_json(raw)
         assert result["narrative_summary"] == raw
         assert result["extracted_entities"] == {}
 
