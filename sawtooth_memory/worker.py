@@ -32,7 +32,6 @@ from .events.types import (
     CompressionCycleCompleteEvent,
     CompressionCycleFailedEvent,
 )
-from .journal import AsyncCompressionJournal
 from .l3_indexer import SemanticIndexer
 
 logger = logging.getLogger(__name__)
@@ -64,7 +63,7 @@ class CompressionWorker:
 
     Lifecycle:
         worker = CompressionWorker(compressor, fallback_truncate=True,
-                                   event_bus=bus, journal=journal)
+                                   event_bus=bus)
         await worker.start()
         worker.enqueue(task)          # non-blocking
         await worker.stop()           # drains queue then exits
@@ -75,7 +74,6 @@ class CompressionWorker:
         compressor: Union[OllamaCompressor, CloudCompressor],
         fallback_truncate: bool = True,
         event_bus: Optional[EventBus] = None,
-        journal: Optional[AsyncCompressionJournal] = None,
         enable_deterministic_ner: bool = True,  # NEW
         custom_ner_patterns: Optional[dict] = None,  # NEW
         storage_adapter: Optional[Any] = None,
@@ -88,7 +86,6 @@ class CompressionWorker:
         self._compressor = compressor
         self._fallback_truncate = fallback_truncate
         self._event_bus = event_bus
-        self._journal = journal
         self._storage_adapter = storage_adapter
         self._pool_id = pool_id
         self._session_id = session_id or "unknown_agent"
@@ -186,7 +183,7 @@ class CompressionWorker:
         state = task.state
         messages_text = _messages_to_text(task.messages)
         cycle_id = task.cycle_id
-        start_time = asyncio.get_event_loop().time()
+        start_time = asyncio.get_running_loop().time()
 
         try:
             # 1. Run local deterministic regex extraction
@@ -196,7 +193,7 @@ class CompressionWorker:
 
             # 2. Execute background LLM compression wave as normal
             result = await self._compressor.compress(messages_text)
-            duration_ms = int((asyncio.get_event_loop().time() - start_time) * 1000)
+            duration_ms = int((asyncio.get_running_loop().time() - start_time) * 1000)
 
             narrative = result.get("narrative_summary", "").strip()
             llm_entities = result.get("extracted_entities", {})

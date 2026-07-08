@@ -13,34 +13,17 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Optional, TYPE_CHECKING
+from typing import Optional
 
 import tiktoken
 
+from .events.bus import EventBus
+from .events.types import (
+    HardLimitReachedEvent,
+    SawtoothEvent,
+    SoftLimitReachedEvent,
+)
 from .state import MemoryState, Message
-
-# Import event types and bus (use TYPE_CHECKING to avoid circular imports)
-if TYPE_CHECKING:
-    from .events.bus import EventBus
-    from .events.types import (
-        SoftLimitReachedEvent,
-        HardLimitReachedEvent,
-        SawtoothEvent,
-    )
-else:
-    try:
-        from .events.bus import EventBus
-        from .events.types import (
-            SoftLimitReachedEvent,
-            HardLimitReachedEvent,
-            SawtoothEvent,
-        )
-    except ImportError:
-        # Fallback: define dummy types when event system is not installed
-        EventBus = None  # type: ignore
-        SoftLimitReachedEvent = None  # type: ignore
-        HardLimitReachedEvent = None  # type: ignore
-        SawtoothEvent = None  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -61,8 +44,8 @@ class TokenMonitor:
         model: str = "gpt-4o",
         soft_limit: int = 3000,
         hard_limit: int = 6000,
-        max_unsummarized_turns: Optional[int] = None,  # NEW: Batching config
-        event_bus: Optional["EventBus"] = None,
+        max_unsummarized_turns: int | None = None,  # NEW: Batching config
+        event_bus: EventBus | None = None,
     ) -> None:
         self.soft_limit = soft_limit
         self.hard_limit = hard_limit
@@ -108,7 +91,7 @@ class TokenMonitor:
     # Batching & Debouncing Logic (NEW)
     # ------------------------------------------------------------------
 
-    async def _on_compression_done(self, event: "SawtoothEvent") -> None:
+    async def _on_compression_done(self, event: SawtoothEvent) -> None:
         """Reset the debounce lock and soft limit flag after compression completes."""
         self._is_compression_queued = False
         self._soft_exceeded = (
@@ -191,7 +174,7 @@ class TokenMonitor:
 
     def _emit_soft_limit_reached(self, current_tokens: int) -> None:
         """Fire-and-forget emission of SoftLimitReachedEvent."""
-        if SoftLimitReachedEvent is None or self.event_bus is None:
+        if self.event_bus is None:
             return
         event = SoftLimitReachedEvent(
             current_tokens=current_tokens,
@@ -203,7 +186,7 @@ class TokenMonitor:
 
     def _emit_hard_limit_reached(self, current_tokens: int) -> None:
         """Fire-and-forget emission of HardLimitReachedEvent."""
-        if HardLimitReachedEvent is None or self.event_bus is None:
+        if self.event_bus is None:
             return
         event = HardLimitReachedEvent(
             current_tokens=current_tokens,
