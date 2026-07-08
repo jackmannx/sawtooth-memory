@@ -11,79 +11,9 @@ adapters so every provider receives identical instructions.
 
 from __future__ import annotations
 
-import json
-import re
 from typing import Protocol, runtime_checkable
 
-# ---------------------------------------------------------------------------
-# Shared compression system prompt
-# ---------------------------------------------------------------------------
-
-_SYSTEM_PROMPT = """\
-You are a memory compression engine for an AI agent system.
-
-Your job:
-1. Read the conversational logs provided.
-2. Write a dense, chronological NARRATIVE of what the agent decided, discovered, \
-and accomplished. Be specific. Preserve causality (why things happened).
-3. Extract all EXACT DETERMINISTIC VALUES into a flat key-value dictionary. \
-This includes: UUIDs, database IDs, file paths, connection strings, precise \
-numeric results, API endpoints, and any other value that must be reproduced \
-exactly in future tool calls.
-
-Rules:
-- IGNORE errors/exceptions if they were subsequently resolved.
-- Do NOT include verbose JSON payloads or base64 strings.
-- Use snake_case keys in extracted_entities.
-- Respond ONLY with valid JSON. No preamble, no markdown fences, no extra text.
-
-Required output schema:
-{
-  "narrative_summary": "<dense chronological narrative as a single string>",
-  "extracted_entities": {
-    "<key>": "<exact_value>"
-  }
-}
-"""
-
-# ---------------------------------------------------------------------------
-# JSON cleanup helper  (ported from OllamaCompressor._parse_output)
-# ---------------------------------------------------------------------------
-
-_MD_FENCE_RE = re.compile(r"```(?:json)?\s*", re.IGNORECASE)
-
-
-def _strip_markdown_fences(text: str) -> str:
-    """Remove ````json` … ```` wrappers that some models emit despite JSON mode."""
-    return _MD_FENCE_RE.sub("", text).strip()
-
-
-def _safe_parse_json(raw: str) -> dict:
-    """
-    Best-effort JSON extraction with two fallback layers:
-      1. Strip markdown fences and try json.loads directly.
-      2. Find the outermost {...} block and retry json.loads.
-      3. Return the raw text as the narrative.
-    """
-    cleaned = _strip_markdown_fences(raw)
-    try:
-        return json.loads(cleaned)
-    except json.JSONDecodeError:
-        pass
-
-    match = re.search(r"\{.*\}", cleaned, re.DOTALL)
-    if match:
-        try:
-            return json.loads(match.group())
-        except json.JSONDecodeError:
-            pass
-
-    return {"narrative_summary": raw, "extracted_entities": {}}
-
-
-# ---------------------------------------------------------------------------
-# Protocol definition
-# ---------------------------------------------------------------------------
+from sawtooth_memory.compression_utils import parse_compression_json
 
 
 @runtime_checkable
@@ -175,7 +105,7 @@ class OpenAIAdapter:
         usage: dict = response_data.get("usage", {})
         total_tokens: int = usage.get("total_tokens", 0)
 
-        parsed = _safe_parse_json(raw_text)
+        parsed = parse_compression_json(raw_text)
         return parsed, total_tokens
 
 
@@ -274,7 +204,7 @@ class AnthropicAdapter:
                 # input is already a parsed dict when using the tools API,
                 # but apply JSON safety for proxy/edge-case responses.
                 if isinstance(raw_input, str):
-                    tool_input = _safe_parse_json(raw_input)
+                    tool_input = parse_compression_json(raw_input)
                 else:
                     tool_input = raw_input
                 break
@@ -283,7 +213,7 @@ class AnthropicAdapter:
         if not tool_input:
             for block in content_blocks:
                 if block.get("type") == "text":
-                    tool_input = _safe_parse_json(block.get("text", ""))
+                    tool_input = parse_compression_json(block.get("text", ""))
                     break
 
         usage: dict = response_data.get("usage", {})
@@ -361,5 +291,5 @@ class GeminiAdapter:
         usage_meta: dict = response_data.get("usageMetadata", {})
         total_tokens: int = usage_meta.get("totalTokenCount", 0)
 
-        parsed = _safe_parse_json(raw_text)
+        parsed = parse_compression_json(raw_text)
         return parsed, total_tokens

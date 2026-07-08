@@ -266,13 +266,11 @@ async with cm:
 
 ## 8. Persistence & Journaling
 
-By default, Sawtooth implements an append-only JSONL journal for state persistence and crash recovery.
+By default, Sawtooth writes an append-only JSONL audit journal for compression cycles and entity anchoring events.
 
-When the `ContextManager` is running, every modification to the L1 buffer, L1.5 ledger, or L2 summary is appended to a local `.sawtooth_journal.jsonl` file.
+When events are enabled, compression cycle completions and entity ledger mutations are appended to the path configured via `ContextManagerConfig.journal_path` (default: `.sawtooth_journal.jsonl`). The journal is intended for observability, debugging, and explainability traces — not automatic state recovery on restart.
 
-If the application crashes unexpectedly, re-initializing a `ContextManager` with the same configuration will automatically replay the journal, restoring the exact state of the hierarchical memory stack prior to the crash.
-
-*Note: In production environments spanning multiple stateless containers, use `RedisStorageAdapter` or `PostgresStorageAdapter` instead of the local filesystem journal. See [Distributed Storage & L3 Semantic Archival](#9-distributed-storage--l3-semantic-archival).*
+For durable session persistence across process restarts or multi-container deployments, use `RedisStorageAdapter` or `PostgresStorageAdapter` via `ContextManagerConfig.storage_adapter`. See [Distributed Storage & L3 Semantic Archival](#9-distributed-storage--l3-semantic-archival).
 
 ---
 

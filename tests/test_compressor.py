@@ -6,18 +6,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from sawtooth_memory.compressor import OllamaCompressor, _prune
-from sawtooth_memory.config import OllamaConfig
-from sawtooth_memory.exceptions import OllamaConnectionError
+from sawtooth_memory.exceptions import CompressionError, OllamaConnectionError
 
 
 @pytest.fixture
-def config():
-    return OllamaConfig(base_url="http://localhost:11434", model="phi4")
-
-
-@pytest.fixture
-def compressor(config):
-    return OllamaCompressor(config)
+def compressor(ollama_config):
+    return OllamaCompressor(ollama_config)
 
 
 class TestPrune:

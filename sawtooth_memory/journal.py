@@ -129,7 +129,7 @@ class AsyncCompressionJournal:
     async def _writer_loop(self) -> None:
         """Background loop that writes entries to disk."""
         buffer = []
-        last_flush = asyncio.get_event_loop().time()
+        last_flush = asyncio.get_running_loop().time()
 
         while self._running or not self._queue.empty():
             try:
@@ -142,7 +142,7 @@ class AsyncCompressionJournal:
                 pass
 
             # Flush if buffer has entries or time elapsed
-            now = asyncio.get_event_loop().time()
+            now = asyncio.get_running_loop().time()
             if buffer and (
                 len(buffer) >= 10 or now - last_flush >= self.flush_interval
             ):
