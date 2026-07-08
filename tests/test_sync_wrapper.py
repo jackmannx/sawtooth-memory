@@ -5,9 +5,10 @@ Tests the synchronous blocking portal wrapper to ensure it safely
 bridges standard sync execution with the async background worker.
 """
 
-import pytest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
+
+import pytest
 
 from sawtooth_memory.config import ContextManagerConfig
 from sawtooth_memory.sync_wrapper import SawtoothSyncWrapper

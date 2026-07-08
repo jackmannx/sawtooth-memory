@@ -1,6 +1,7 @@
 import pytest
+
 from sawtooth_memory.events.bus import EventBus
-from sawtooth_memory.events.types import SawtoothEvent, L1EvictionEvent
+from sawtooth_memory.events.types import L1EvictionEvent, SawtoothEvent
 
 pytestmark = pytest.mark.asyncio
 

@@ -1,7 +1,8 @@
 import pytest
+
 from sawtooth_memory.config import ContextManagerConfig
+from sawtooth_memory.events.types import EntityAnchoredEvent, L1EvictionEvent
 from sawtooth_memory.middleware import ContextManager
-from sawtooth_memory.events.types import L1EvictionEvent, EntityAnchoredEvent
 
 pytestmark = pytest.mark.asyncio
 

@@ -1,8 +1,10 @@
 """Built-in event handlers for logging and journaling."""
 
 import logging
-from typing import Callable, Awaitable
+from typing import Awaitable, Callable
+
 from sawtooth_memory.journal import AsyncCompressionJournal
+
 from .types import CompressionCycleCompleteEvent
 
 logger = logging.getLogger(__name__)

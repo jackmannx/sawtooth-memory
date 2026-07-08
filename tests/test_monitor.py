@@ -2,15 +2,15 @@
 
 import pytest
 
+from sawtooth_memory.monitor import TokenMonitor
 from sawtooth_memory.state import (
+    ArchivalMemory,
+    EntityLedger,
     MemoryState,
-    WorkingMemory,
     Message,
     SystemPrompt,
-    EntityLedger,
-    ArchivalMemory,
+    WorkingMemory,
 )
-from sawtooth_memory.monitor import TokenMonitor
 
 
 @pytest.fixture

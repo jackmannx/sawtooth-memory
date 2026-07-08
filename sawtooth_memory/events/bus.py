@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from typing import Dict, List, Callable, Awaitable, Optional, TypeVar, Set
+from typing import Awaitable, Callable, Dict, List, Optional, Set, TypeVar
 
 from .types import SawtoothEvent
 

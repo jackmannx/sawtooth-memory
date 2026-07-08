@@ -13,10 +13,10 @@ from __future__ import annotations
 import logging
 import re
 from datetime import datetime, timezone
-from typing import List, Sequence
+from typing import List
 
 from .embeddings.base import EmbeddingProvider
-from .state import MemoryState, SemanticVectorMemory
+from .state import MemoryState
 from .storage.semantic import SemanticChunkResult, SemanticStorageAdapter
 
 logger = logging.getLogger(__name__)
