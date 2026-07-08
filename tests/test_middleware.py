@@ -4,18 +4,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from sawtooth_memory.config import ContextManagerConfig, OllamaConfig
+from sawtooth_memory.config import ContextManagerConfig
 from sawtooth_memory.middleware import ContextManager
-
-
-@pytest.fixture
-def config():
-    return ContextManagerConfig(
-        soft_limit_tokens=50,
-        hard_limit_tokens=200,
-        chunk_size=3,
-        ollama=OllamaConfig(base_url="http://localhost:11434", model="phi4"),
-    )
 
 
 @pytest.fixture
