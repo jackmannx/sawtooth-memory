@@ -53,7 +53,7 @@ logger = logging.getLogger(__name__)
 
 def _extract_entity_event(record: dict) -> tuple:
     """Extract (entity_key, operation, timestamp) safely from nested OOP JSON records."""
-    _ENTITY_CHANNEL = "l1_5.entity_anchored"
+    entity_channel = EntityAnchoredEvent.event_type
 
     # v2 - fields nested under "payload" FIRST
     payload = record.get("payload")
@@ -69,7 +69,7 @@ def _extract_entity_event(record: dict) -> tuple:
     # v3 - fields nested under "data" SECOND
     data = record.get("data")
     if isinstance(data, dict):
-        if record.get("channel") == _ENTITY_CHANNEL or "entity_key" in data:
+        if record.get("channel") == entity_channel or "entity_key" in data:
             return (
                 data.get("entity_key"),
                 data.get("operation", "unknown"),
@@ -77,7 +77,7 @@ def _extract_entity_event(record: dict) -> tuple:
             )
 
     # v1 - fields live at the record root LAST
-    if record.get("channel") == _ENTITY_CHANNEL or "entity_key" in record:
+    if record.get("channel") == entity_channel or "entity_key" in record:
         return (
             record.get("entity_key"),
             record.get("operation", "unknown"),
@@ -140,7 +140,7 @@ class ContextManager:
                 except Exception as e:
                     logger.error(f"Failed to write entity event to journal: {e}")
 
-            self._event_bus.subscribe("l1_5.entity_anchored", entity_journal_handler)  # type: ignore[arg-type]
+            self._event_bus.subscribe(EntityAnchoredEvent.event_type, entity_journal_handler)  # type: ignore[arg-type]
 
         # 2. Token monitor now receives the initialized event_bus
         self._monitor = TokenMonitor(
