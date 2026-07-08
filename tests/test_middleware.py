@@ -33,6 +33,24 @@ class TestLifecycle:
         await cm.stop()
         assert not cm._worker._running
 
+    @pytest.mark.asyncio
+    async def test_journal_path_from_config(self, tmp_path):
+        journal_file = tmp_path / "custom_journal.jsonl"
+        config = ContextManagerConfig(journal_path=str(journal_file))
+        cm = ContextManager("Sys.", config)
+        assert cm._journal_path == journal_file
+        assert cm._journal is not None
+        assert cm._journal.path == journal_file
+
+    @pytest.mark.asyncio
+    async def test_journal_path_kwarg_overrides_config(self, tmp_path):
+        config_path = tmp_path / "config_journal.jsonl"
+        kwarg_path = tmp_path / "kwarg_journal.jsonl"
+        config = ContextManagerConfig(journal_path=str(config_path))
+        cm = ContextManager("Sys.", config, journal_path=kwarg_path)
+        assert cm._journal_path == kwarg_path
+        assert cm._journal.path == kwarg_path
+
 
 class TestAddMessage:
     @pytest.mark.asyncio
