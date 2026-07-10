@@ -589,6 +589,10 @@ class ContextManager:
         self._state.l2_archival.append_narrative(note)
         logger.warning(f"Hard truncation: dropped {len(chunk)} messages from L1.")
 
+        # The soft-limit path may have queued compression before we got here.
+        # Release the debounce lock so L1 can trigger a fresh cycle once truncated.
+        self._monitor.release_compression_lock()
+
     # ------------------------------------------------------------------
     # Observability
     # ------------------------------------------------------------------
