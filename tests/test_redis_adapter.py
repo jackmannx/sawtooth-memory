@@ -93,3 +93,36 @@ async def test_redis_pool_shared_state_roundtrip(mock_from_url):
     loaded_entities, loaded_archive = loaded
     assert loaded_entities.get_latest("txn_id") == "txn_998877_alpha"
     assert "Node A summarized previous failures." in loaded_archive.narrative
+
+
+@pytest.mark.asyncio
+@patch("redis.asyncio.from_url")
+async def test_redis_persists_l3_semantic_metadata(mock_from_url):
+    """L3 indexing stats must survive a Redis save/load round-trip."""
+    from datetime import datetime, timezone
+
+    mock_client = AsyncMock()
+    mock_from_url.return_value = mock_client
+
+    adapter = RedisStorageAdapter(redis_url="redis://fake:6379", ttl_seconds=3600)
+    session_id = "session_with_l3"
+
+    original_state = MemoryState(
+        l0_system=SystemPrompt(content="You are a distributed agent.")
+    )
+    original_state.l3_semantic.chunk_count = 42
+    original_state.l3_semantic.last_indexed_at = datetime(
+        2026, 1, 15, 12, 0, 0, tzinfo=timezone.utc
+    )
+
+    await adapter.save_state(session_id, original_state)
+    saved_json_payload = mock_client.setex.call_args[0][2]
+
+    mock_client.get.return_value = saved_json_payload
+    loaded_state = await adapter.load_state(session_id)
+
+    assert loaded_state is not None
+    assert loaded_state.l3_semantic.chunk_count == 42
+    assert loaded_state.l3_semantic.last_indexed_at == datetime(
+        2026, 1, 15, 12, 0, 0, tzinfo=timezone.utc
+    )
