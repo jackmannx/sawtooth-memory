@@ -336,9 +336,19 @@ class ContextManager:
         if pool_state is None:
             return
 
-        entities, archive = pool_state
-        self._state.l1_5_entities = entities
-        self._state.l2_archival = archive
+        pool_entities, pool_archive = pool_state
+
+        for key, history in pool_entities.entities.items():
+            for value in history:
+                self._state.l1_5_entities.upsert({key: value})
+
+        pool_narrative = pool_archive.narrative.strip()
+        if pool_narrative:
+            local_narrative = self._state.l2_archival.narrative.strip()
+            if not local_narrative:
+                self._state.l2_archival.narrative = pool_narrative
+            elif pool_narrative not in local_narrative:
+                self._state.l2_archival.append_narrative(pool_narrative)
 
     async def build_prompt(self) -> list[dict[str, str]]:
         """
