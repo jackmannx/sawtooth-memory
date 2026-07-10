@@ -147,3 +147,29 @@ async def test_multi_agent_pool_synced_on_start():
     async with ContextManager("You are node B.", config, enable_events=False) as cm:
         assert cm.state.l1_5_entities.get_latest("cluster_token") == "secret_pass_123"
         assert "Shared deployment context." in cm.state.l2_archival.narrative
+
+
+@pytest.mark.asyncio
+async def test_build_prompt_preserves_unsynced_local_entities():
+    """Pool sync must merge shared state without clobbering local-only entities."""
+    adapter = MockRedisStorageAdapter()
+    pool_id = "merge_pool"
+
+    shared_entities = EntityLedger()
+    shared_entities.upsert({"shared_key": "from_pool_only"})
+    adapter.pool_store[pool_id] = (shared_entities, ArchivalMemory())
+
+    config = ContextManagerConfig(
+        storage_adapter=adapter,
+        pool_id=pool_id,
+        session_id="agent_b",
+        soft_limit_tokens=10000,
+        hard_limit_tokens=20000,
+    )
+
+    async with ContextManager("Sys.", config, enable_events=False) as cm:
+        cm.state.l1_5_entities.upsert({"local_only": "agent_b_secret"})
+        await cm.build_prompt()
+
+        assert cm.state.l1_5_entities.get_latest("local_only") == "agent_b_secret"
+        assert cm.state.l1_5_entities.get_latest("shared_key") == "from_pool_only"

@@ -90,9 +90,14 @@ class TokenMonitor:
     # Batching & Debouncing Logic (NEW)
     # ------------------------------------------------------------------
 
+    def release_compression_lock(self) -> None:
+        """Release the debounce lock so compression can be re-triggered."""
+        self._is_compression_queued = False
+        logger.debug("TokenMonitor: Compression lock released.")
+
     async def _on_compression_done(self, event: SawtoothEvent) -> None:
         """Reset the debounce lock and soft limit flag after compression completes."""
-        self._is_compression_queued = False
+        self.release_compression_lock()
         self._soft_exceeded = (
             False  # Reset so the telemetry event can fire again next cycle
         )

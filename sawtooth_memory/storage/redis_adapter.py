@@ -20,6 +20,7 @@ from ..state import (
     ArchivalMemory,
     EntityLedger,
     MemoryState,
+    SemanticVectorMemory,
     SystemPrompt,
     WorkingMemory,
 )
@@ -69,7 +70,7 @@ class RedisStorageAdapter(BaseStorageAdapter):
         return f"sawtooth:pool:{pool_id}:shared"
 
     async def load_state(self, session_id: str) -> Optional[MemoryState]:
-        """Fetch the private session payload and hydrate L0/L1 state."""
+        """Fetch the private session payload and hydrate L0/L1/L3 metadata."""
         key = self._get_key(session_id)
         raw_data = await self._client.get(key)
 
@@ -79,20 +80,23 @@ class RedisStorageAdapter(BaseStorageAdapter):
         payload: dict[str, Any] = json.loads(raw_data)
         system_payload = payload.get("l0_system", {})
         l1_payload = payload.get("l1_working", {})
+        l3_payload = payload.get("l3_semantic", {})
 
         return MemoryState(
             l0_system=SystemPrompt.model_validate(system_payload),
             l1_working=WorkingMemory.model_validate(l1_payload),
             l1_5_entities=EntityLedger(),
             l2_archival=ArchivalMemory(),
+            l3_semantic=SemanticVectorMemory.model_validate(l3_payload),
         )
 
     async def save_state(self, session_id: str, state: MemoryState) -> None:
-        """Serialize and write private per-session L0/L1 state with optional TTL."""
+        """Serialize and write private per-session L0/L1/L3 metadata with optional TTL."""
         key = self._get_key(session_id)
         payload = {
             "l0_system": state.l0_system.model_dump(mode="json"),
             "l1_working": state.l1_working.model_dump(mode="json"),
+            "l3_semantic": state.l3_semantic.model_dump(mode="json"),
         }
         json_payload = json.dumps(payload)
 

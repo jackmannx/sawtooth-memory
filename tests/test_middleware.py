@@ -1,5 +1,6 @@
 """tests/test_middleware.py — Integration tests for ContextManager."""
 
+import asyncio
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -198,3 +199,68 @@ class TestHealthCheck:
 
         with pytest.raises(ValueError, match="strictly less than hard_limit_tokens"):
             await cm.health_check()
+
+
+class TestHardTruncate:
+    @pytest.mark.asyncio
+    async def test_force_truncate_releases_compression_debounce_lock(self, config):
+        """Hard truncation must release the debounce lock left by a queued cycle."""
+        async with ContextManager("Sys.", config, enable_events=False) as cm:
+            for _ in range(config.chunk_size):
+                await cm.add_message("user", "seed message with enough words for tokens")
+
+            cm._monitor._is_compression_queued = True
+            assert cm._monitor._is_compression_queued is True
+
+            await cm._force_truncate()
+            assert cm._monitor._is_compression_queued is False
+
+    @pytest.mark.asyncio
+    async def test_hard_limit_allows_fresh_compression_after_slow_worker(self):
+        """After hard truncation, new messages can queue another compression cycle."""
+        slow_compressor = AsyncMock()
+
+        async def slow_compress(_text: str) -> dict:
+            await asyncio.sleep(5)
+            return {"narrative_summary": "done", "extracted_entities": {}}
+
+        slow_compressor.compress = slow_compress
+        slow_compressor.close = AsyncMock()
+
+        config = ContextManagerConfig(
+            soft_limit_tokens=20,
+            hard_limit_tokens=40,
+            chunk_size=2,
+            fallback_truncate=True,
+            enable_deterministic_ner=False,
+        )
+
+        with patch(
+            "sawtooth_memory.middleware.OllamaCompressor",
+            return_value=slow_compressor,
+        ), patch(
+            "sawtooth_memory.middleware.CompressionWorker.enqueue"
+        ) as mock_enqueue:
+            cm = ContextManager("Sys.", config, enable_events=False)
+            await cm.start()
+            try:
+                for i in range(8):
+                    await cm.add_message(
+                        "user", f"Message {i} with enough words to use tokens"
+                    )
+                initial_enqueue_count = mock_enqueue.call_count
+                assert initial_enqueue_count >= 1
+
+                for i in range(8, 12):
+                    await cm.add_message(
+                        "user", f"Hard push message {i} with many words here"
+                    )
+
+                for i in range(12, 20):
+                    await cm.add_message(
+                        "user", f"Recovery message {i} with enough words again"
+                    )
+
+                assert mock_enqueue.call_count > initial_enqueue_count
+            finally:
+                await cm.stop()
