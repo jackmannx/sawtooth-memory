@@ -70,22 +70,25 @@ When `build_prompt()` is called, Sawtooth constructs the prompt using a strict h
 │ L2: Archival Summary                                        │
 │   "User and AI discussed Python optimization techniques."   │
 ├─────────────────────────────────────────────────────────────┤
+│ L3: Semantic Retrieval Hits                                 │
+│   [ARCHIVE_L3]                                              │
+│   1. "You can use a B-Tree index..."                        │
+├─────────────────────────────────────────────────────────────┤
 │ L1.5: Entity Ledger                                         │
 │   [user_name]: "Alice"                                      │
 │   [target_db]: "postgres://localhost:5432"                  │
 ├─────────────────────────────────────────────────────────────┤
 │ L1: Working Memory (Recent Messages)                        │
 │   User: "How do I index the users table?"                   │
-│   AI: "You can use a B-Tree index..."                       │
 └─────────────────────────────────────────────────────────────┘
 
 ```
 
 * **L0 (System):** Immutable persona definitions, tool schemas, and core constraints.
 * **L2 (Archive):** Highly compressed, token-efficient narrative of older conversation turns.
+* **L3 (Semantic Archive):** Vector-indexed chunks of evicted L1 text stored in pgvector. Automatically retrieved and injected into `build_prompt()` based on the latest user query.
 * **L1.5 (Ledger):** Exact string matching for UUIDs, transaction IDs, names, and explicit rules extracted during compression.
 * **L1 (Working):** The uncompressed, verbatim text of the most recent `N` conversation turns.
-* **L3 (Semantic Archive):** Vector-indexed chunks of evicted L1 text stored in pgvector (metadata only in `MemoryState`; vectors live in the storage adapter). Retrieval is exposed via `search_semantic_archive()` but is not yet injected into `build_prompt()`.
 
 ---
 
@@ -152,6 +155,9 @@ v2_config = ContextManagerConfig(background_model="gpt-4o-mini")
 **L3 Semantic Storage Parameters:**
 
 * `enable_l3_semantic_storage`: When `True`, evicted L1 text is chunked, batch-embedded, and persisted to pgvector during background compression. Requires a `PostgresStorageAdapter`.
+* `enable_l3_prompt_retrieval`: When `True` (default), L3 chunks are automatically retrieved and injected into `build_prompt()`. Ignored if L3 storage is disabled.
+* `l3_retrieval_top_k`: Maximum number of L3 semantic chunks to retrieve during `build_prompt()`. Defaults to 3.
+* `l3_retrieval_max_tokens`: Token budget for the L3 retrieval block in `build_prompt()`. Defaults to 500.
 * `embedding_backend`: `"hash"` for deterministic local vectors (tests/dev) or `"openai"` for production-quality embeddings.
 * `embedding_model`: OpenAI embedding model name (default: `text-embedding-3-small`).
 * `embedding_dimension`: Vector width; must match `PostgresStorageAdapter.embedding_dimension`.

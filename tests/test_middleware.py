@@ -135,6 +135,30 @@ class TestBuildPrompt:
             prompt = await cm.build_prompt()
             assert "[ENTITY_LEDGER_L1_5]" not in prompt[0]["content"]
 
+    @pytest.mark.asyncio
+    async def test_tier_ordering(self, config):
+        async with ContextManager("Sys.", config) as cm:
+            cm.state.l2_archival.narrative = "L2 Narrative."
+            cm.state.l1_5_entities.entities["conn_id"] = ["abc-123"]
+            
+            # Mock L3 retrieval
+            cm._config.enable_l3_prompt_retrieval = True
+            cm._last_l3_retrieval = []
+            
+            async def mock_retrieve(query):
+                return "1. L3 Chunk."
+            cm._retrieve_l3_chunks = mock_retrieve
+            cm._l3_indexer = True # Just to pass the truthy check
+            
+            prompt = await cm.build_prompt(retrieval_query="test")
+            content = prompt[0]["content"]
+            
+            l2_idx = content.index("[ARCHIVE_L2]")
+            l3_idx = content.index("[ARCHIVE_L3]")
+            l1_5_idx = content.index("[ENTITY_LEDGER_L1_5]")
+            
+            assert l2_idx < l3_idx < l1_5_idx
+
 
 class TestGetStats:
     @pytest.mark.asyncio

@@ -326,11 +326,11 @@ async def main():
         prompt = await cm.build_prompt()
 ```
 
-### 7. Semantic Vector L3 Archival Memory (Storage Layer)
+### 7. Semantic Vector L3 Archival Memory (Storage & Retrieval)
 
 Sawtooth can index evicted L1 conversation text into a **pgvector-backed L3 semantic archive** during background compression. Vectors are stored separately from the JSONB `MemoryState` payload to keep session snapshots lean.
 
-**Important:** L3 retrieval is available via `search_semantic_archive()` but is **not yet injected into `build_prompt()`**. L2 narrative summaries remain the only archival content in the compiled prompt until RAG retrieval is wired in a future release.
+**Important:** L3 retrieval is automatically injected into `build_prompt()` when enabled. You can also manually query it via `search_semantic_archive()`.
 
 Requirements:
 - `PostgresStorageAdapter` with the PostgreSQL `vector` extension installed
@@ -353,6 +353,7 @@ async def main():
         storage_adapter=postgres,
         session_id="user_session_994",
         enable_l3_semantic_storage=True,
+        enable_l3_prompt_retrieval=True, # Automatically retrieves chunks
         embedding_backend="hash",       # "openai" for production embeddings
         embedding_dimension=384,
         l3_chunk_max_chars=2000,
@@ -362,7 +363,10 @@ async def main():
         await cm.add_message("user", "Router firmware is v2.4.1 and drops packets nightly.")
         # After background compression, evicted L1 text is chunked, embedded, and stored in L3.
 
-        # Storage-layer retrieval (not yet wired into build_prompt):
+        # The next build_prompt() will automatically retrieve relevant L3 chunks
+        prompt = await cm.build_prompt()
+
+        # Storage-layer retrieval (manual):
         matches = await cm.search_semantic_archive("router firmware packets", top_k=3)
         for chunk in matches:
             print(f"[{chunk.similarity:.2f}] {chunk.text}")
@@ -391,7 +395,10 @@ if __name__ == "__main__":
 - [x] Redis Distributed Storage Adapter (High-Speed Session Pooling)
 - [x] Postgres Storage Adapter (Persistent Relational Cache with pgvector)
 - [x] Multi-Agent Memory Pooling (Shared contextual state)
-- [x] Semantic Vector L3 Archival Memory (RAG integration — storage layer complete; retrieval not yet wired into `build_prompt()`)
+- [x] Semantic Vector L3 Archival Memory (Storage layer)
+
+- **Phase 4: RAG Integration**
+- [x] Semantic Vector L3 Archival Memory (Retrieval injected into `build_prompt()`)
 
 ---
 

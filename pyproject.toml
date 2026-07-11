@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "sawtooth-memory"
-version = "0.2.1"
+version = "0.2.2"
 description = "An asynchronous, non-blocking hierarchical memory framework for LLM agents that eliminates main-thread latency and mitigates context degradation via multi-tiered background compression and deterministic entity ledgers."
 readme = "README.md"
 requires-python = ">=3.11"

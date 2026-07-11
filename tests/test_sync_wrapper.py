@@ -126,3 +126,7 @@ def test_sync_wrapper_l3_search_and_count():
         assert len(results) == 1
         assert "semantic" in results[0].text.lower()
         assert memory.l3_chunk_count() == 1
+
+        prompt = memory.build_prompt(retrieval_query="semantic archive")
+        assert "[ARCHIVE_L3]" in prompt[0]["content"]
+        assert "semantic" in prompt[0]["content"].lower()

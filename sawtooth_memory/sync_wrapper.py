@@ -96,7 +96,7 @@ class SawtoothSyncWrapper:
 
         portal.call(cm.add_message, role, content)
 
-    def build_prompt(self) -> List[Dict[str, str]]:
+    def build_prompt(self, *, retrieval_query: Optional[str] = None) -> List[Dict[str, str]]:
         """
         Compile all memory tiers into an OpenAI-compatible messages list.
         Executed strictly on the background thread to prevent concurrent read/write errors.
@@ -110,7 +110,7 @@ class SawtoothSyncWrapper:
             )
 
         async def _safe_build() -> List[Dict[str, str]]:
-            return await cm.build_prompt()
+            return await cm.build_prompt(retrieval_query=retrieval_query)
 
         return portal.call(_safe_build)
 

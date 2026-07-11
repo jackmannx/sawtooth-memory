@@ -159,3 +159,96 @@ async def test_explain_prompt_includes_l3_metadata():
 
     assert trace["l3_semantic"]["chunk_count"] == 3
     assert trace["l3_semantic"]["in_prompt"] is False
+
+@pytest.mark.asyncio
+async def test_build_prompt_injects_l3_when_enabled():
+    storage = InMemorySemanticStorage(embedding_dimension=64)
+    config = make_l3_config(storage)
+
+    async with ContextManager("sys", config=config, enable_events=False) as cm:
+        await cm._worker.index_l3_semantic(
+            cm.state,
+            "USER: Router firmware v2.4.1 drops packets nightly.",
+            "manual-cycle",
+        )
+        await cm.add_message("user", "What do we know about routers?")
+        prompt = await cm.build_prompt()
+
+        system_content = prompt[0]["content"]
+        assert "[ARCHIVE_L3]" in system_content
+        assert "Router firmware" in system_content
+
+        trace = cm.explain_prompt()
+        assert trace["l3_semantic"]["in_prompt"] is True
+        assert len(trace["l3_semantic"]["retrieved_chunks"]) == 1
+
+@pytest.mark.asyncio
+async def test_build_prompt_skips_l3_when_opt_out():
+    storage = InMemorySemanticStorage(embedding_dimension=64)
+    config = make_l3_config(storage, enable_l3_prompt_retrieval=False)
+
+    async with ContextManager("sys", config=config, enable_events=False) as cm:
+        await cm._worker.index_l3_semantic(
+            cm.state,
+            "USER: Router firmware v2.4.1 drops packets nightly.",
+            "manual-cycle",
+        )
+        await cm.add_message("user", "What do we know about routers?")
+        prompt = await cm.build_prompt()
+
+        system_content = prompt[0]["content"]
+        assert "[ARCHIVE_L3]" not in system_content
+
+@pytest.mark.asyncio
+async def test_build_prompt_uses_explicit_retrieval_query():
+    storage = InMemorySemanticStorage(embedding_dimension=64)
+    config = make_l3_config(storage)
+
+    async with ContextManager("sys", config=config, enable_events=False) as cm:
+        await cm._worker.index_l3_semantic(
+            cm.state,
+            "USER: Router firmware v2.4.1 drops packets nightly.",
+            "manual-cycle",
+        )
+        # Empty L1, but explicit query
+        prompt = await cm.build_prompt(retrieval_query="routers")
+
+        system_content = prompt[0]["content"]
+        assert "[ARCHIVE_L3]" in system_content
+        assert "Router firmware" in system_content
+
+@pytest.mark.asyncio
+async def test_build_prompt_respects_token_budget():
+    storage = InMemorySemanticStorage(embedding_dimension=64)
+    config = make_l3_config(storage, l3_retrieval_max_tokens=10, l3_retrieval_top_k=5)
+
+    async with ContextManager("sys", config=config, enable_events=False) as cm:
+        await cm._worker.index_l3_semantic(
+            cm.state,
+            "USER: A very long chunk about router firmware that drops packets nightly.",
+            "c1",
+        )
+        await cm._worker.index_l3_semantic(
+            cm.state,
+            "USER: Another long chunk about network switches and firewalls.",
+            "c2",
+        )
+        await cm.add_message("user", "routers and switches")
+        prompt = await cm.build_prompt()
+
+        system_content = prompt[0]["content"]
+        assert "[ARCHIVE_L3]" in system_content
+        # Should only have room for the first chunk
+        assert "1." in system_content
+        assert "2." not in system_content
+
+@pytest.mark.asyncio
+async def test_build_prompt_no_l3_without_query():
+    storage = InMemorySemanticStorage(embedding_dimension=64)
+    config = make_l3_config(storage)
+
+    async with ContextManager("sys", config=config, enable_events=False) as cm:
+        # L3 enabled, empty L1, no retrieval_query
+        prompt = await cm.build_prompt()
+        system_content = prompt[0]["content"]
+        assert "[ARCHIVE_L3]" not in system_content

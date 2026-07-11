@@ -230,6 +230,8 @@ class ContextManager:
             embedding_model=self._config.embedding_model,
         )
 
+        self._last_l3_retrieval: list[dict[str, Any]] = []
+
         logger.debug(
             f"ContextManager initialised. "
             f"soft_limit={self._config.soft_limit_tokens}, "
@@ -350,7 +352,45 @@ class ContextManager:
             elif pool_narrative not in local_narrative:
                 self._state.l2_archival.append_narrative(pool_narrative)
 
-    async def build_prompt(self) -> list[dict[str, str]]:
+    async def _retrieve_l3_chunks(self, query: str) -> str:
+        """
+        Retrieve chunks from L3 semantic storage and format them into a text block,
+        respecting the configured token budget.
+        """
+        self._last_l3_retrieval = []
+        if not self._l3_indexer:
+            return ""
+
+        results = await self._l3_indexer.search(
+            self._config.session_id, query, top_k=self._config.l3_retrieval_top_k
+        )
+        if not results:
+            return ""
+
+        block_lines = []
+        current_tokens = 0
+        budget = self._config.l3_retrieval_max_tokens
+
+        for i, res in enumerate(results, 1):
+            line = f"{i}. {res.text}"
+            line_tokens = self._monitor.count_text(line)
+            if current_tokens + line_tokens > budget and current_tokens > 0:
+                break
+
+            block_lines.append(line)
+            current_tokens += line_tokens
+            self._last_l3_retrieval.append({
+                "text": res.text,
+                "similarity": res.similarity,
+                "origin": "L3 Semantic Retrieval",
+            })
+
+        if not block_lines:
+            return ""
+
+        return "\n".join(block_lines)
+
+    async def build_prompt(self, *, retrieval_query: str | None = None) -> list[dict[str, str]]:
         """
         Compile all memory tiers into an OpenAI-compatible messages list.
 
@@ -363,6 +403,9 @@ class ContextManager:
 
             [ARCHIVE_L2]          (omitted if empty)
             <compressed history narrative>
+
+            [ARCHIVE_L3]          (omitted if empty or disabled)
+            <semantic retrieval hits>
 
             [ENTITY_LEDGER_L1_5]  (omitted if empty)
             <json key-value pairs>
@@ -377,6 +420,22 @@ class ContextManager:
 
         if state.l2_archival.narrative.strip():
             system_parts.append(f"[ARCHIVE_L2]\n{state.l2_archival.narrative.strip()}")
+
+        # L3 Semantic Retrieval
+        self._last_l3_retrieval = []
+        if self._config.enable_l3_prompt_retrieval and self._l3_indexer:
+            query = retrieval_query
+            if not query:
+                # Scan L1 messages newest-first for the last user message
+                for msg in reversed(state.l1_working.messages):
+                    if msg.role == "user":
+                        query = msg.content
+                        break
+
+            if query:
+                l3_block = await self._retrieve_l3_chunks(query)
+                if l3_block:
+                    system_parts.append(f"[ARCHIVE_L3]\n{l3_block}")
 
         if state.l1_5_entities.entities:
             system_parts.append(
@@ -439,7 +498,8 @@ class ContextManager:
                     else None
                 ),
                 "origin": "Background L3 vector indexing (L1 evictions → pgvector)",
-                "in_prompt": False,
+                "in_prompt": len(self._last_l3_retrieval) > 0,
+                "retrieved_chunks": self._last_l3_retrieval,
             },
         }
 
@@ -634,6 +694,7 @@ class ContextManager:
             "l2_tokens": self._monitor.count_text(self._state.l2_archival.narrative),
             "l3_chunk_count": self._state.l3_semantic.chunk_count,
             "l3_enabled": self._l3_indexer is not None,
+            "l3_retrieved_chunk_count": len(self._last_l3_retrieval),
             "worker": self._worker.stats,
         }
 
@@ -711,7 +772,11 @@ class ContextManager:
             report["checks"]["l3_semantic_storage"] = "ENABLED"
             report["checks"]["l3_embedding_backend"] = self._config.embedding_backend
             report["checks"]["l3_chunk_count"] = self._state.l3_semantic.chunk_count
+            report["checks"]["l3_prompt_retrieval"] = (
+                "ENABLED" if self._config.enable_l3_prompt_retrieval else "DISABLED"
+            )
         else:
             report["checks"]["l3_semantic_storage"] = "DISABLED"
+            report["checks"]["l3_prompt_retrieval"] = "DISABLED"
 
         return report

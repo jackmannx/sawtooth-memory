@@ -169,6 +169,18 @@ class ContextManagerConfig(BaseModel):
             "(e.g. PostgresStorageAdapter)."
         ),
     )
+    enable_l3_prompt_retrieval: bool = Field(
+        default=True,
+        description="Automatically retrieve and inject L3 chunks into build_prompt(). Ignored if L3 storage is disabled.",
+    )
+    l3_retrieval_top_k: int = Field(
+        default=3,
+        description="Maximum number of L3 semantic chunks to retrieve during build_prompt().",
+    )
+    l3_retrieval_max_tokens: int = Field(
+        default=500,
+        description="Token budget for the L3 retrieval block in build_prompt().",
+    )
     embedding_backend: str = Field(
         default="hash",
         description='Embedding provider for L3 indexing: "hash" (local/tests) or "openai".',
@@ -260,5 +272,16 @@ class ContextManagerConfig(BaseModel):
 
         if self.l3_chunk_max_chars < 1:
             raise ValueError("l3_chunk_max_chars must be positive.")
+
+        if self.enable_l3_prompt_retrieval and not self.enable_l3_semantic_storage:
+            raise ValueError(
+                "enable_l3_prompt_retrieval=True requires enable_l3_semantic_storage=True."
+            )
+
+        if self.l3_retrieval_top_k < 1:
+            raise ValueError("l3_retrieval_top_k must be positive.")
+
+        if self.l3_retrieval_max_tokens < 1:
+            raise ValueError("l3_retrieval_max_tokens must be positive.")
 
         return self

@@ -7,12 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.2.2] - YYYY-MM-DD
+## [0.2.2] - 2026-07-11
 ### Added
-- Pending Phase 4
-
-### Fixed
-- Pending Phase 4
+- Wired L3 semantic retrieval into `build_prompt()` with automatic injection and opt-out config flag.
+- Token-budgeted `[ARCHIVE_L3]` block in the compiled prompt.
+- Explainability updates for L3 retrieved chunks in `explain_prompt()`.
 
 ## [0.2.1] - 2026-07-11
 ### Added
