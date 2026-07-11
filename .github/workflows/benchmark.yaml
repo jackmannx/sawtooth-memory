@@ -20,7 +20,7 @@ permissions:
 
 jobs:
   microbenchmarks:
-    name: Microbenchmarks (regression)
+    name: Microbenchmarks (smoke)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -35,13 +35,16 @@ jobs:
           python -m pip install --upgrade pip
           pip install ".[dev,langgraph]"
 
-      - name: Run microbenchmarks with regression gate
+      - name: Run microbenchmarks
         run: |
+          # Smoke test only — do not compare against micro_baseline.json here.
+          # That baseline was captured on a developer machine (CPU/Python version
+          # differ from GitHub Actions runners, so cross-machine compare fails).
+          # Use the local regression gate documented in BENCHMARKS.md instead.
           pytest benchmarks/micro \
             --benchmark-only \
-            --benchmark-compare=benchmarks/baselines/micro_baseline.json \
-            --benchmark-compare-fail=mean:25% \
-            --benchmark-min-rounds=3
+            --benchmark-min-rounds=3 \
+            -q
 
   scenario-benchmarks:
     name: Scenario benchmarks (mock E2E)

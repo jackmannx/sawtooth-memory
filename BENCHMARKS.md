@@ -174,15 +174,28 @@ Recall is scored across the compiled prompt, L1.5 entity ledger, and L2 archival
 
 The [Benchmark Suite](.github/workflows/benchmark.yaml) workflow runs on every PR that touches `benchmarks/` or `sawtooth_memory/`:
 
-- Microbenchmark regression gate (25% mean tolerance vs baseline)
+- Microbenchmark smoke test (ensures benchmarks run; no cross-machine regression gate)
 - Scenario integration benchmarks
 - Mock harness smoke test
+
+### Local regression gate
+
+`benchmarks/baselines/micro_baseline.json` is captured on a **developer machine** and must not be compared in CI — GitHub Actions runners use different CPUs and Python builds, which produces false regressions.
+
+Run the regression gate locally before merging performance-sensitive changes:
+
+```bash
+.venv/bin/pytest benchmarks/micro \
+  --benchmark-only \
+  --benchmark-compare=benchmarks/baselines/micro_baseline.json \
+  --benchmark-compare-fail=mean:25%
+```
 
 ---
 
 ## Updating Baselines
 
-After intentional performance changes:
+After intentional performance changes on your machine:
 
 ```bash
 .venv/bin/pytest benchmarks/micro --benchmark-only --benchmark-save=baseline
