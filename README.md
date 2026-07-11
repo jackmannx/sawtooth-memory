@@ -81,17 +81,20 @@ When your agent is ready to respond, Sawtooth stitches together an optimized con
 
 ## Performance Benchmarks
 
-By moving compression to the background, Sawtooth achieves massive latency reductions on the main thread while maintaining 100% recall accuracy.
+By moving compression to the background, Sawtooth eliminates per-turn main-thread blocking while maintaining 100% recall accuracy.
 
-**Local GPU Benchmark (NVIDIA RTX 5060 | Model: phi4-mini | 20-Message Conversation)**
+**Live GPU Benchmark (NVIDIA RTX 5060 | Ollama `phi4-mini` | 10-Turn / 20-Message Conversation)**
 
-| Performance Metric       | Standard Summary Memory | Sawtooth Hierarchical | Architectural Advantage        |
-| ------------------------ | ----------------------- | --------------------- | ------------------------------ |
-| **Main Thread Latency**  | 64.15 seconds           | **5.70 seconds**      | **11.3x Faster Execution**     |
-| **Final Prompt Payload** | 506 tokens              | **454 tokens**        | **10% Lower Token Cost**       |
-| **UUID / Fact Recall**   | Variable / Hallucinates | **100% Retained**     | **Guaranteed via L1.5 Ledger** |
+| Performance Metric | Standard Summary Memory | Sawtooth Hierarchical | Architectural Advantage |
+| ------------------ | ----------------------- | --------------------- | ----------------------- |
+| **User-perceived turn latency (p95)** | 24.3 seconds | **<0.1 ms** | **Main thread unblocked during conversation** |
+| **Mean blocked per turn** | 7.8 seconds | **0.03 ms** | **Compression off the critical path** |
+| **Total main-thread blocked (10 turns)** | 78.2 seconds | **<2 ms** | **No per-turn GPU wait** |
+| **Session-end background drain** | — | 1.1 seconds | One-time flush at `cm.stop()` |
+| **Final Prompt Payload** | 563 tokens | 866 tokens | Structured L1.5 ledger preserves exact facts |
+| **UUID / Fact Recall** | 0% (lost after summarization) | **100% Retained** | **Guaranteed via L1.5 Ledger** |
 
-For full methodology, cloud comparisons, and reproducibility steps, view our [Performance Benchmarks](BENCHMARKS.md).
+For full methodology, reproducibility steps, and the complete benchmark suite, view our [Performance Benchmarks](BENCHMARKS.md).
 
 ---
 
