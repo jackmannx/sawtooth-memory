@@ -43,6 +43,22 @@ def benchmark_config(
     return ContextManagerConfig(**kwargs)
 
 
+def recall_benchmark_config(**overrides: Any) -> ContextManagerConfig:
+    """Config tuned for recall benchmarks with room for background compression."""
+    defaults: dict[str, Any] = {
+        "soft_limit_tokens": 400,
+        "hard_limit_tokens": 8000,
+        "chunk_size": 4,
+        "enable_deterministic_ner": True,
+        "custom_ner_patterns": {
+            "aws_arn": r"arn:aws:[a-z0-9\-]+:[a-z0-9\-]+:\d{12}:[a-zA-Z0-9\-\_/]+",
+            "transaction_id": r"txn_[a-z0-9_]+",
+        },
+    }
+    defaults.update(overrides)
+    return benchmark_config(enable_events=False, **defaults)
+
+
 class MockedContextManager:
     """Context manager that patches OllamaCompressor with MockCompressor."""
 
@@ -79,3 +95,7 @@ class MockedContextManager:
         if self._cm is not None:
             await self._cm.stop()
         self._patch.stop()
+
+    @property
+    def compressor(self) -> MockCompressor:
+        return self.mock
