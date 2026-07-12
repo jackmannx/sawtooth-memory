@@ -14,7 +14,13 @@ from sawtooth_memory.compression_core import (
 )
 from sawtooth_memory.exceptions import CompressionError
 from sawtooth_memory.ner import NERPipeline
-from sawtooth_memory.state import ArchivalMemory, EntityLedger, MemoryState, Message, SystemPrompt
+from sawtooth_memory.state import (
+    ArchivalMemory,
+    EntityLedger,
+    MemoryState,
+    Message,
+    SystemPrompt,
+)
 
 
 @pytest.fixture

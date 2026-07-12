@@ -11,7 +11,7 @@ import json
 import logging
 import uuid
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Any, Union
 
 from .async_bridge import run_coro_once
 from .compression_core import (

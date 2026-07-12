@@ -36,6 +36,11 @@ from .exceptions import TokenLimitExceededError
 from .journal import AsyncCompressionJournal
 from .l3_indexer import SemanticIndexer
 from .monitor import TokenMonitor
+from .prompt_compiler import (
+    compile_prompt,
+    format_l3_retrieval_block,
+    resolve_l3_retrieval_query,
+)
 from .state import (
     ArchivalMemory,
     EntityLedger,
@@ -44,11 +49,6 @@ from .state import (
     MessageRole,
     SystemPrompt,
     WorkingMemory,
-)
-from .prompt_compiler import (
-    compile_prompt,
-    format_l3_retrieval_block,
-    resolve_l3_retrieval_query,
 )
 from .storage.semantic import SemanticChunkResult
 from .worker import CompressionTask, CompressionWorker, _messages_to_text
