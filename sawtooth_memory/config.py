@@ -144,6 +144,26 @@ class ContextManagerConfig(BaseModel):
         default_factory=dict,
         description="User-defined key-to-regex-string mappings that extend or override default tracking.",
     )
+    enable_salience_extractor: bool = Field(
+        default=True,
+        description="Enable the local salience heuristic extractor for unstructured identifiers.",
+    )
+    salience_threshold: float = Field(
+        default=0.5,
+        description="Minimum salience score (0–1) for heuristic entity promotion to L1.5.",
+    )
+    salience_max_entities: int = Field(
+        default=20,
+        description="Maximum heuristic entities extracted per compression or ingest scan.",
+    )
+    enable_ingest_entity_scan: bool = Field(
+        default=True,
+        description="Scan incoming L1 messages for critical entities at ingest time.",
+    )
+    enable_entity_verifier: bool = Field(
+        default=True,
+        description="Re-inject protected entities dropped by the compression LLM.",
+    )
     storage_adapter: Optional[Any] = Field(
         default=None,
         description=(
@@ -283,5 +303,11 @@ class ContextManagerConfig(BaseModel):
 
         if self.l3_retrieval_max_tokens < 1:
             raise ValueError("l3_retrieval_max_tokens must be positive.")
+
+        if not 0.0 <= self.salience_threshold <= 1.0:
+            raise ValueError("salience_threshold must be between 0.0 and 1.0.")
+
+        if self.salience_max_entities < 1:
+            raise ValueError("salience_max_entities must be positive.")
 
         return self

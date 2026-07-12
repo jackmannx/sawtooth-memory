@@ -25,6 +25,7 @@ from sawtooth_memory.compression_utils import (
     normalize_compression_result,
     parse_compression_json,
 )
+from sawtooth_memory.entity_guard import build_compression_user_content
 from sawtooth_memory.config import CloudConfig, OllamaConfig
 from sawtooth_memory.exceptions import CompressionError, OllamaConnectionError
 from sawtooth_memory.providers import ProviderAdapter, get_adapter
@@ -92,7 +93,12 @@ class OllamaCompressor:
         resp = await client.get("/api/tags", timeout=5.0)
         resp.raise_for_status()
 
-    async def compress(self, messages_text: str) -> dict:
+    async def compress(
+        self,
+        messages_text: str,
+        *,
+        protected_entities: dict[str, str] | None = None,
+    ) -> dict:
         """
         Prune and compress a raw message chunk.
 
@@ -112,15 +118,13 @@ class OllamaCompressor:
             f"OllamaCompressor: pruned {len(messages_text)} → {len(pruned)} chars"
         )
 
+        user_content = build_compression_user_content(pruned, protected_entities)
         payload = {
             "model": self._config.model,
             "stream": False,
             "messages": [
                 {"role": "system", "content": COMPRESSION_SYSTEM_PROMPT},
-                {
-                    "role": "user",
-                    "content": f"Compress the following context logs:\n\n{pruned}",
-                },
+                {"role": "user", "content": user_content},
             ],
         }
 
@@ -221,7 +225,12 @@ class CloudCompressor:
     # Public interface
     # ------------------------------------------------------------------
 
-    async def compress(self, messages_text: str) -> dict:
+    async def compress(
+        self,
+        messages_text: str,
+        *,
+        protected_entities: dict[str, str] | None = None,
+    ) -> dict:
         """
         Prune, send to the cloud provider, and return a normalised result.
 
@@ -240,7 +249,7 @@ class CloudCompressor:
             f"CloudCompressor: pruned {len(messages_text)} → {len(pruned)} chars"
         )
 
-        content = f"Compress the following context logs:\n\n{pruned}"
+        content = build_compression_user_content(pruned, protected_entities)
         payload = self._adapter.build_payload(
             model=self._config.model,
             system_prompt=COMPRESSION_SYSTEM_PROMPT,

@@ -25,6 +25,8 @@ Rules:
 - IGNORE errors/exceptions if they were subsequently resolved.
 - Do NOT include verbose JSON payloads or base64 strings.
 - Use snake_case keys in extracted_entities.
+- If a PROTECTED VALUES block is provided, every listed value MUST appear
+  verbatim in extracted_entities under the given key.
 - Respond ONLY with valid JSON. No preamble, no markdown fences, no extra text.
 
 Required output schema:

@@ -30,6 +30,7 @@ from .events.types import (
 )
 from .exceptions import CompressionError, OllamaConnectionError
 from .l3_indexer import SemanticIndexer
+from .entity_guard import apply_entity_guard, build_protected_entities
 from .ner import NERPipeline, active_strategy_context
 from .state import ArchivalMemory, EntityLedger, MemoryState, Message
 
@@ -75,6 +76,10 @@ class CompressionWorker:
         event_bus: Optional[EventBus] = None,
         enable_deterministic_ner: bool = True,  # NEW
         custom_ner_patterns: Optional[dict] = None,  # NEW
+        enable_salience_extractor: bool = True,
+        salience_threshold: float = 0.5,
+        salience_max_entities: int = 20,
+        enable_entity_verifier: bool = True,
         storage_adapter: Optional[Any] = None,
         pool_id: Optional[str] = None,
         session_id: Optional[str] = None,
@@ -99,9 +104,13 @@ class CompressionWorker:
 
         # Initialize the NER Pipeline
         self._enable_ner = enable_deterministic_ner
+        self._enable_entity_verifier = enable_entity_verifier
         self._ner_pipeline = NERPipeline.from_config(
             enable=self._enable_ner,
             custom_patterns=custom_ner_patterns,
+            enable_salience=enable_salience_extractor,
+            salience_threshold=salience_threshold,
+            salience_max_entities=salience_max_entities,
         )
 
     # ------------------------------------------------------------------
@@ -185,13 +194,15 @@ class CompressionWorker:
         start_time = asyncio.get_running_loop().time()
 
         try:
-            # 1. Run local deterministic regex extraction
-            deterministic_entities: dict[str, str] = {}
-            if self._enable_ner:
-                deterministic_entities = self._ner_pipeline.extract(messages_text)
+            # 1. Run local deterministic + salience extraction
+            extraction = self._ner_pipeline.extract_with_metadata(messages_text)
+            protected_entities = build_protected_entities(extraction)
 
-            # 2. Execute background LLM compression wave as normal
-            result = await self._compressor.compress(messages_text)
+            # 2. Execute background LLM compression with protection manifest
+            result = await self._compressor.compress(
+                messages_text,
+                protected_entities=protected_entities or None,
+            )
             duration_ms = int((asyncio.get_running_loop().time() - start_time) * 1000)
 
             narrative = result.get("narrative_summary", "").strip()
@@ -199,17 +210,16 @@ class CompressionWorker:
             original_tokens = self._estimate_tokens(messages_text)
             compressed_tokens = self._estimate_tokens(narrative)
 
-            # 3. Secure Merge: Deterministic regex matches override LLM hallucinations
-            combined_entities = {**llm_entities, **deterministic_entities}
+            # 3. Secure merge + post-merge verification
+            combined_entities, strategy_map = apply_entity_guard(
+                extraction,
+                llm_entities,
+                narrative,
+                enable_verifier=self._enable_entity_verifier,
+            )
             result["extracted_entities"] = combined_entities
 
-            # 4. Generate Strategy Mapping Context for Event Consumers
-            strategy_map = {k: "deterministic" for k in deterministic_entities}
-            for k in llm_entities:
-                if k not in strategy_map:
-                    strategy_map[k] = "llm_synthesis"
-
-            # 5. Bind context token and merge into state securely
+            # 4. Bind context token and merge into state securely
             token = active_strategy_context.set(strategy_map)
             try:
                 self._merge(state, result)
@@ -314,19 +324,15 @@ class CompressionWorker:
 
     def _fallback_merge(self, state: MemoryState, messages: list[Message]) -> None:
         messages_text = _messages_to_text(messages)
-        deterministic_entities: dict[str, str] = {}
 
-        # Even during a provider outage, deterministic values are salvaged
         if self._enable_ner:
-            deterministic_entities = self._ner_pipeline.extract(messages_text)
-
-        if deterministic_entities:
-            strategy_map = {k: "deterministic" for k in deterministic_entities}
-            token = active_strategy_context.set(strategy_map)
-            try:
-                state.l1_5_entities.upsert(deterministic_entities)
-            finally:
-                active_strategy_context.reset(token)
+            extraction = self._ner_pipeline.extract_with_metadata(messages_text)
+            if extraction.entities:
+                token = active_strategy_context.set(extraction.strategies)
+                try:
+                    state.l1_5_entities.upsert(extraction.entities)
+                finally:
+                    active_strategy_context.reset(token)
 
         note = (
             f"[COMPRESSION UNAVAILABLE: {len(messages)} messages were truncated. "
@@ -421,6 +427,11 @@ class CompressionWorker:
     ) -> int:
         """Public entry point for L3 indexing (used by ContextManager hard-truncate)."""
         return await self._index_l3_semantic(state, messages_text, cycle_id)
+
+    @property
+    def ner_pipeline(self) -> NERPipeline:
+        """Expose the NER pipeline for ingest-time entity scanning."""
+        return self._ner_pipeline
 
     # ------------------------------------------------------------------
     # Helpers
