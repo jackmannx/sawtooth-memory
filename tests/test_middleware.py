@@ -146,7 +146,7 @@ class TestBuildPrompt:
             cm._last_l3_retrieval = []
             
             async def mock_retrieve(query):
-                return "1. L3 Chunk."
+                return "1. L3 Chunk.", [{"text": "L3 Chunk.", "similarity": 1.0, "origin": "L3 Semantic Retrieval"}]
             cm._retrieve_l3_chunks = mock_retrieve
             cm._l3_indexer = True # Just to pass the truthy check
             

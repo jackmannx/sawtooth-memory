@@ -1,4 +1,4 @@
-"""Shared compression prompt and output parsing utilities."""
+"""Shared compression prompt, pruning, and output parsing utilities."""
 
 from __future__ import annotations
 
@@ -8,6 +8,26 @@ import re
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+# Base64-like strings over 80 chars (avoids mangling normal text)
+_BASE64_RE = re.compile(r"[A-Za-z0-9+/]{80,}={0,2}")
+
+# Python / JS stack traces
+_STACKTRACE_RE = re.compile(
+    r"Traceback \(most recent call last\):.*?(?=\n\n|\Z)",
+    re.DOTALL,
+)
+
+# Long runs of whitespace-separated hex (e.g. binary output)
+_HEX_RE = re.compile(r"(?:[0-9a-fA-F]{2}\s){16,}")
+
+
+def prune_compression_input(raw: str) -> str:
+    """Strip noise that wastes compressor tokens without adding meaning."""
+    text = _BASE64_RE.sub("[BASE64_REMOVED]", raw)
+    text = _STACKTRACE_RE.sub("[STACKTRACE_REMOVED]", text)
+    text = _HEX_RE.sub("[HEX_REMOVED]", text)
+    return text
 
 COMPRESSION_SYSTEM_PROMPT = """\
 You are a memory compression engine for an AI agent system.
