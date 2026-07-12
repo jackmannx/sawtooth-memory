@@ -74,6 +74,7 @@ When your agent is ready to respond, Sawtooth stitches together an optimized con
 - **Zero-Latency Ingestion:** Messages are appended to L1 instantly. A local `tiktoken` monitor checks thresholds without making API calls.
 - **Dual LLM Compression Backends:** Run compression locally via `OllamaCompressor` or in the cloud using `CloudCompressor` (with modular adapters for OpenAI, Anthropic, and Gemini).
 - **Deterministic NER Engine:** A zero-latency local regex pipeline extracts UUIDs, file paths, and URIs _before_ the LLM sees the text, securely populating the Entity Ledger (L1.5) and overriding potential LLM hallucinations.
+- **Salience Entity Guard:** A local heuristic extractor catches unstructured identifiers (ticket IDs, tracking codes, reference numbers) that regex misses. Protection manifests, post-merge verification, and ingest-time scanning keep critical values out of compression loss.
 - **Turn-Based Batching & Debouncing:** Prevent background queue flooding using `max_unsummarized_turns` to trigger compression safely by turn count, alongside token limits.
 - **Graceful Degradation:** If the system hits the `hard_limit_tokens` before the asynchronous background worker finishes a cycle, a fallback protocol forcefully truncates the oldest L1 messages on the main thread to prevent API crashes.
 
@@ -144,7 +145,9 @@ async def main():
         soft_limit_tokens=1000,           # Token threshold to trigger background compression
         hard_limit_tokens=2000,           # Emergency truncation limit
         max_unsummarized_turns=10,        # Turn-based batching threshold
-        enable_deterministic_ner=True     # Enable local regex extraction for the Entity Ledger
+        enable_deterministic_ner=True,     # Enable local regex + salience extraction for the Entity Ledger
+        enable_salience_extractor=True,    # Catch unstructured IDs (e.g. INC-4421, ALPHA-991)
+        enable_ingest_entity_scan=True,    # Scan incoming messages at add_message() time
     )
 
     async with ContextManager(system_prompt="You are a helpful assistant.", config=config) as cm:
@@ -183,19 +186,39 @@ config = ContextManagerConfig(
 
 ## Advanced Features
 
-### 1. Deterministic NER (Named Entity Recognition)
+### 1. Entity Guard (Regex + Salience Extraction)
 
-By setting `enable_deterministic_ner=True`, Sawtooth intercepts incoming text and uses a fast regex engine to extract critical string identifiers directly into the Entity Ledger. You can also inject custom patterns:
+Sawtooth protects critical identifiers through a layered, local-first **Entity Guard** pipeline. Regex handles known formats; a salience heuristic catches unstructured values regex cannot see.
+
+**Layer 1 — Regex (high precision):** UUIDs, file paths, URIs, and custom patterns.
+
+**Layer 2 — Salience heuristics:** Cue-word proximity, structural shape, entropy, and rarity scoring promote identifiers like `INC-4421` or `ALPHA-991` into L1.5 without predefined regex.
+
+**Layer 3 — Protection manifest:** Locally discovered entities are injected into the compression prompt so the LLM must preserve them verbatim.
+
+**Layer 4 — Post-merge verifier:** If the compression LLM still drops a protected value, it is force-reinjected into the ledger.
 
 ```python
 config = ContextManagerConfig(
     enable_deterministic_ner=True,
     custom_ner_patterns={
         "aws_arn": r"arn:aws:[a-z0-9\-]+:[a-z0-9\-]+:\d{12}:[a-zA-Z0-9\-\_/]+"
-    }
+    },
+    enable_salience_extractor=True,
+    salience_threshold=0.5,
+    enable_ingest_entity_scan=True,
+    enable_entity_verifier=True,
 )
 
+async with ContextManager("You are an agent.", config=config) as cm:
+    # Ingest-time scan catches unstructured IDs immediately
+    await cm.add_message("user", "Escalate ticket INC-4421 to on-call.")
+
+    # Or pin a value explicitly
+    await cm.pin_entity("tracking_code", "ALPHA-991")
 ```
+
+Extraction strategies are tracked in telemetry and explainability traces: `deterministic`, `salience_heuristic`, `pinned`, and `llm_synthesis`.
 
 ### 2. LangGraph Integration & ToolMessage Sanitization
 
@@ -287,7 +310,8 @@ print(json.dumps(trace, indent=2))
       "prompt_component": "[ENTITY_LEDGER_L1_5]",
       "entity_key": "user_transaction_id",
       "entity_value": "txn_998877_alpha",
-      "origin": "Anchored via explicit tracking engine (Operation: insert) [Strategy: deterministic]"
+      "origin": "Anchored via explicit tracking engine (Operation: insert) [Strategy: salience_heuristic]",
+      "confidence": "90% (Salience Heuristic)"
     }
   ],
   "l1_working_messages": 2
@@ -386,6 +410,7 @@ if __name__ == "__main__":
 - [x] EventBus Subsystem & JSONL Auditing Journal
 - [x] Explainability Traces & Performance Benchmarking Harness
 - [x] Deterministic NER Engine
+- [x] Salience Entity Guard (heuristic extraction, protection manifest, verifier)
 - [x] LangGraph ToolMessage Sanitization
 - [x] Turn-Based Batching & Debouncing
 - [x] Modern LangChain (LCEL) History Adapter

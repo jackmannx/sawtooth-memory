@@ -12,6 +12,8 @@ async def main():
         hard_limit_tokens=1500,
         fallback_truncate=True,
         enable_deterministic_ner=True,
+        enable_salience_extractor=True,
+        enable_ingest_entity_scan=True,
     )
 
     system_prompt = "You are a highly capable AI assistant."
@@ -21,8 +23,10 @@ async def main():
         await cm.add_message("user", "Hello! My database connection ID is db_prod_994.")
         await cm.add_message("assistant", "I have noted your connection ID.")
         await cm.add_message("user", "Actually, switch that to db_staging_112.")
+        await cm.add_message("user", "Also escalate ticket INC-4421 to on-call.")
 
-        # Deterministic NER extracts IDs from L1 on the compression path.
+        # Entity Guard: regex + salience extract IDs at ingest and compression time.
+        # pin_entity() is available for explicit pinning of critical values.
         # build_prompt() stitches L0, L2, L1.5, and L1 into an OpenAI-style list.
         prompt = await cm.build_prompt()
 
