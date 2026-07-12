@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, Optional, Union
 
 from .compressor import CloudCompressor, OllamaCompressor
+from .entity_guard import apply_entity_guard, build_protected_entities
 from .events.bus import EventBus
 from .events.types import (
     CompressionCycleCompleteEvent,
@@ -30,7 +31,6 @@ from .events.types import (
 )
 from .exceptions import CompressionError, OllamaConnectionError
 from .l3_indexer import SemanticIndexer
-from .entity_guard import apply_entity_guard, build_protected_entities
 from .ner import NERPipeline, active_strategy_context
 from .state import ArchivalMemory, EntityLedger, MemoryState, Message
 

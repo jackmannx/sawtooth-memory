@@ -7,8 +7,6 @@ the compression model drops or paraphrases them.
 
 from __future__ import annotations
 
-from typing import Any
-
 from .ner import EntityStrategy, ExtractionResult
 
 
