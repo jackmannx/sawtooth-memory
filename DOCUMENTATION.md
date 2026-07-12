@@ -34,6 +34,8 @@ In traditional architectures, summarizing conversational history is a synchronou
             ▼
   2. cm.add_message() ───────────────────────┐  (Task Dispatched to Queue)
             │                                │
+            ├─ Ingest Entity Scan (optional)   │  Regex + salience → L1.5
+            │                                │
   (Returns in <0.01s)                        ▼
             │                         3. Worker awakens
             ▼                                │
@@ -41,16 +43,19 @@ In traditional architectures, summarizing conversational history is a synchronou
             │                         4. Check Token Limits (Soft/Hard)
   (Retrieves active payload)                 │
             │                                ▼
-            ▼                         5. Call Compression LLM (Ollama/Cloud)
+            ▼                         5. Local Entity Guard (regex + salience)
   5. Send to Main Agent                      │
                                              ▼
-                                      6. Extract L1.5 Entities
+                                      6. Call Compression LLM (with protection manifest)
                                              │
                                              ▼
-                                      7. Update L2 Summary
+                                      7. Secure merge + post-merge verifier
                                              │
                                              ▼
-                                      8. Commit to Disk Journal
+                                      8. Update L1.5 Entities & L2 Summary
+                                             │
+                                             ▼
+                                      9. Commit to Disk Journal
 
 ```
 
@@ -87,7 +92,7 @@ When `build_prompt()` is called, Sawtooth constructs the prompt using a strict h
 * **L0 (System):** Immutable persona definitions, tool schemas, and core constraints.
 * **L2 (Archive):** Highly compressed, token-efficient narrative of older conversation turns.
 * **L3 (Semantic Archive):** Vector-indexed chunks of evicted L1 text stored in pgvector. Automatically retrieved and injected into `build_prompt()` based on the latest user query.
-* **L1.5 (Ledger):** Exact string matching for UUIDs, transaction IDs, names, and explicit rules extracted during compression.
+* **L1.5 (Ledger):** Exact string matching for UUIDs, transaction IDs, file paths, and other critical values. Populated by the Entity Guard pipeline (regex, salience heuristics, ingest-time scanning, and explicit pinning) with rolling conflict history per key.
 * **L1 (Working):** The uncompressed, verbatim text of the most recent `N` conversation turns.
 
 ---
@@ -105,6 +110,22 @@ A dedicated background asynchronous task. It monitors the total token count of t
 ### `MemoryState`
 
 A thread-safe data structure that holds the current L1, L1.5, and L2 data. It utilizes `asyncio.Lock()` to prevent race conditions when the background worker attempts to modify the summary while the main thread is simultaneously reading the prompt.
+
+### Entity Guard Pipeline
+
+Sawtooth protects critical identifiers through a layered, local-first pipeline that runs entirely in-process:
+
+1. **Regex extraction** — High-precision patterns for UUIDs, file paths, URIs, and user-defined formats. Captures all matches per pattern (e.g. `uuid`, `uuid_2`).
+2. **Salience extraction** — Heuristic scoring (cue-word proximity, structural shape, entropy, rarity) catches unstructured identifiers like `INC-4421` or `ALPHA-991` without predefined regex.
+3. **Protection manifest** — Locally discovered entities are injected into the compression LLM prompt as a `PROTECTED VALUES` block.
+4. **Secure merge** — Local entities override LLM-extracted values on key collision.
+5. **Post-merge verifier** — Re-injects protected values dropped from both `extracted_entities` and the narrative summary.
+
+**Ingest-time scanning:** When `enable_ingest_entity_scan=True`, `add_message()` runs the same local extractors on incoming text so the live L1 window is protected before compression.
+
+**Explicit pinning:** `pin_entity(key, value)` writes a critical value directly to L1.5 with `pinned` strategy provenance.
+
+Extraction strategies tracked in telemetry: `deterministic`, `salience_heuristic`, `pinned`, `llm_synthesis`.
 
 ---
 
@@ -152,6 +173,16 @@ v2_config = ContextManagerConfig(background_model="gpt-4o-mini")
 * `hard_limit_tokens`: A strict ceiling. If the worker cannot compress fast enough (e.g., due to API rate limits), the system will brutally truncate old messages to prevent your main agent from crashing due to context window overflow.
 * `chunk_size`: The number of messages shifted from L1 to L2 per compression cycle.
 
+**Entity Guard Parameters:**
+
+* `enable_deterministic_ner`: Enable the local regex extraction layer (default: `True`).
+* `custom_ner_patterns`: User-defined `key → regex` mappings extending default UUID/file-path/URI patterns.
+* `enable_salience_extractor`: Enable heuristic extraction for unstructured identifiers (default: `True`).
+* `salience_threshold`: Minimum salience score (0–1) to promote a candidate to L1.5 (default: `0.5`).
+* `salience_max_entities`: Maximum heuristic entities per scan/compression cycle (default: `20`).
+* `enable_ingest_entity_scan`: Run entity extraction on `add_message()` for live L1 protection (default: `True`).
+* `enable_entity_verifier`: Re-inject protected values dropped by the compression LLM (default: `True`).
+
 **L3 Semantic Storage Parameters:**
 
 * `enable_l3_semantic_storage`: When `True`, evicted L1 text is chunked, batch-embedded, and persisted to pgvector during background compression. Requires a `PostgresStorageAdapter`.
@@ -187,6 +218,31 @@ async def agent_loop():
 
 ```
 
+### Pinning Critical Entities
+
+Use `pin_entity()` when you know a value must survive compression regardless of extraction heuristics:
+
+```python
+await cm.pin_entity("tracking_code", "ALPHA-991")
+```
+
+Pinned entities are tagged with strategy `pinned` in the JSONL journal and explainability traces.
+
+### Entity Guard Configuration Example
+
+```python
+config = ContextManagerConfig(
+    enable_deterministic_ner=True,
+    custom_ner_patterns={
+        "transaction_id": r"txn_[a-z0-9_]+",
+    },
+    enable_salience_extractor=True,
+    salience_threshold=0.4,
+    enable_ingest_entity_scan=True,
+    enable_entity_verifier=True,
+)
+```
+
 ### Manual Lifecycle Management
 
 If you cannot use `async with` (e.g., inside certain web framework state objects), you must manually start and stop the manager:
@@ -209,17 +265,23 @@ Sawtooth provides deep visibility into memory operations, which is crucial for d
 
 ### Explainability Traces
 
-The `explain_prompt()` method returns a deterministic audit trail showing exactly what data is in the active payload and where it came from.
+The `explain_prompt()` method returns a deterministic audit trail showing exactly what data is in the active payload and where it came from. Each L1.5 entity includes a strategy label: `deterministic`, `salience_heuristic`, `pinned`, or `llm_synthesis`.
 
 ```python
 trace = cm.explain_prompt()
 print(trace)
 # {
-#   "system_prompt": "...",
-#   "l2_summary_lineage": ["User asked about X", "AI explained Y"],
-#   "l1_5_entities": [{"key": "ID", "value": "123", "origin": "Compression Turn 4"}],
-#   "l1_active_messages": 2,
-#   "total_tokens": 150
+#   "l0_system": {"content": "...", "origin": "Hardcoded System Initialization"},
+#   "l2_archival": {"content": "...", "origin": "Background Ollama Compression (L1 -> L2)"},
+#   "l1_5_entities": [
+#       {
+#           "entity_key": "ticket_id",
+#           "entity_value": ["INC-4421"],
+#           "origin": "Anchored via explicit tracking engine (Operation: insert) [Strategy: salience_heuristic]",
+#           "confidence": "90% (Salience Heuristic)"
+#       }
+#   ],
+#   "l1_working_messages": 2
 # }
 
 ```
@@ -311,12 +373,12 @@ Efficiency choices:
 - HNSW cosine index on embeddings for fast similarity search.
 - Session-scoped B-tree index on `session_id`.
 
-**Retrieval is not wired into `build_prompt()`** in this release. Use the storage-layer API:
+**Retrieval is automatically injected into `build_prompt()`** when `enable_l3_prompt_retrieval=True` (default). You can also query the storage layer directly:
 
 ```python
 matches = await cm.search_semantic_archive("transaction ID dispute", top_k=5)
 stats = await cm.l3_chunk_count()
-trace = cm.explain_prompt()  # includes l3_semantic metadata with in_prompt=False
+trace = cm.explain_prompt()  # includes l3_semantic metadata
 ```
 
 Enable L3 indexing:

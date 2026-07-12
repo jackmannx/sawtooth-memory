@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Added
+- Salience Entity Guard: local heuristic extractor for unstructured identifiers (ticket IDs, tracking codes, reference numbers).
+- Multi-match regex extraction (e.g. `uuid`, `uuid_2`) for multiple occurrences per pattern.
+- Protection manifest injection into compression prompts and post-merge entity verifier.
+- Ingest-time entity scanning on `add_message()` and explicit `pin_entity()` API.
+- Strategy provenance telemetry: `salience_heuristic` and `pinned` extraction sources.
 
 ## [0.2.2] - 2026-07-11
 ### Added

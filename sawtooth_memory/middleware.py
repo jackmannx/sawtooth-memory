@@ -222,6 +222,10 @@ class ContextManager:
             event_bus=self._event_bus,
             enable_deterministic_ner=self._config.enable_deterministic_ner,
             custom_ner_patterns=self._config.custom_ner_patterns,
+            enable_salience_extractor=self._config.enable_salience_extractor,
+            salience_threshold=self._config.salience_threshold,
+            salience_max_entities=self._config.salience_max_entities,
+            enable_entity_verifier=self._config.enable_entity_verifier,
             storage_adapter=self._config.storage_adapter,
             pool_id=self._config.pool_id,
             session_id=self._config.session_id,
@@ -300,6 +304,12 @@ class ContextManager:
         msg.token_count = self._monitor.count_message(msg)
         self._state.l1_working.append(msg)
 
+        if (
+            self._config.enable_ingest_entity_scan
+            and self._config.enable_deterministic_ner
+        ):
+            await self._scan_message_entities(content)
+
         logger.debug(
             f"add_message: role={role}, tokens={msg.token_count}, "
             f"l1_total={self._state.l1_working.token_count}"
@@ -327,6 +337,40 @@ class ContextManager:
             await self._config.storage_adapter.save_state(
                 self._config.session_id, self._state
             )
+
+    async def pin_entity(self, key: str, value: str) -> None:
+        """
+        Explicitly pin a critical entity into the L1.5 ledger.
+
+        Pinned entities are protected through compression with highest priority
+        and tagged with strategy ``pinned`` in telemetry.
+        """
+        from .ner import active_strategy_context
+
+        token = active_strategy_context.set({key: "pinned"})
+        try:
+            self._state.l1_5_entities.upsert({key: value})
+        finally:
+            active_strategy_context.reset(token)
+
+        if self._config.storage_adapter:
+            await self._config.storage_adapter.save_state(
+                self._config.session_id, self._state
+            )
+
+    async def _scan_message_entities(self, content: str) -> None:
+        """Lightweight ingest-time entity scan for the live L1 window."""
+        from .ner import active_strategy_context
+
+        extraction = self._worker.ner_pipeline.extract_with_metadata(content)
+        if not extraction.entities:
+            return
+
+        token = active_strategy_context.set(extraction.strategies)
+        try:
+            self._state.l1_5_entities.upsert(extraction.entities)
+        finally:
+            active_strategy_context.reset(token)
 
     async def _sync_pool_state_from_storage(self) -> None:
         adapter = self._config.storage_adapter
@@ -553,6 +597,12 @@ class ContextManager:
                 },
             )
             strategy = history.get("strategy", "deterministic")
+            confidence_map = {
+                "deterministic": "100% (Deterministic)",
+                "salience_heuristic": "90% (Salience Heuristic)",
+                "pinned": "100% (Pinned)",
+                "llm_synthesis": "85% (LLM Synthesized)",
+            }
             trace["l1_5_entities"].append(
                 {
                     "prompt_component": "[ENTITY_LEDGER_L1_5]",
@@ -561,9 +611,9 @@ class ContextManager:
                     # FIX: Inject the operation back into the origin string so the test catches it
                     "origin": f"Anchored via explicit tracking engine (Operation: {history['operation']}) [Strategy: {strategy}]",
                     "timestamp": history["timestamp"],
-                    "confidence": "100% (Deterministic)"
-                    if strategy == "deterministic"
-                    else "85% (LLM Synthesized)",
+                    "confidence": confidence_map.get(
+                        strategy, "100% (Deterministic)"
+                    ),
                 }
             )
 
