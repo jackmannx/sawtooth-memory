@@ -130,7 +130,33 @@ pip install sawtooth-memory[all]
 
 ---
 
-## Quickstart (V2 Configuration)
+## Quickstart
+
+### Sync scripts, Flask, Django, CLI (recommended for simple apps)
+
+Use `SyncContextManager` for linear scripts with no asyncio boilerplate. Compression runs **inline** when token limits are hit (the calling thread blocks until compression finishes).
+
+```python
+from sawtooth_memory import SyncContextManager, ContextManagerConfig
+
+config = ContextManagerConfig.for_sync_script(soft_limit_tokens=1500)
+
+with SyncContextManager("You are a helpful assistant.", config=config) as memory:
+    memory.add_message("user", "Ticket INC-4421 needs escalation.")
+    memory.add_message("assistant", "I'll look up INC-4421 now.")
+    prompt = memory.build_prompt()
+    print(prompt)
+```
+
+See [`examples/simple_sync_script.py`](examples/simple_sync_script.py) for a full runnable example.
+
+| API | When to use | Compression behavior |
+| --- | --- | --- |
+| `SyncContextManager` | Scripts, WSGI, notebooks | **Blocking** inline on soft/hard limits |
+| `ContextManager` | FastAPI, LangGraph, asyncio agents | **Non-blocking** background worker |
+| `SawtoothSyncWrapper` | Sync app that needs async worker behavior | Non-blocking via AnyIO daemon thread |
+
+### Async apps (non-blocking background worker)
 
 The V2 configuration introduces dynamic validation, allowing you to set a single `background_model` parameter that automatically routes to the respective local or cloud backend. Cloud models (`gpt-*`, `claude-*`, `gemini-*`) read API keys from standard environment variables (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`).
 
@@ -259,26 +285,36 @@ lc_messages = history.messages
 
 ```
 
-### 4. Synchronous API Wrapper (Flask, Django, CLI)
+### 4. Synchronous APIs
 
-If you are building in a traditional synchronous environment (like a standard Flask or Django view) where you cannot use asyncio or await, Sawtooth provides an enterprise-grade SawtoothSyncWrapper. It uses an AnyIO BlockingPortal to isolate the asynchronous background worker on a safe daemon thread, preventing event loop collisions while maintaining zero-latency writes.
+#### SyncContextManager (recommended)
+
+For Flask, Django, CLI tools, and linear scripts, use the sync-native API. No asyncio, background worker, or AnyIO portal is required:
+
+```python
+from sawtooth_memory import SyncContextManager, ContextManagerConfig
+
+def my_flask_route():
+    config = ContextManagerConfig.for_sync_script(soft_limit_tokens=1500)
+
+    with SyncContextManager("You are a helpful assistant.", config=config) as memory:
+        memory.add_message("user", "Hello world!")
+        prompt = memory.build_prompt()
+        return prompt
+```
+
+#### SawtoothSyncWrapper (advanced: non-blocking in sync hosts)
+
+If you need **non-blocking** compression inside a synchronous application (same behavior as `ContextManager`), use `SawtoothSyncWrapper`. It runs the full async stack on an AnyIO daemon thread:
 
 ```python
 from sawtooth_memory.sync_wrapper import SawtoothSyncWrapper
 
 def my_flask_route():
-    # Use standard 'with' - no async required!
     with SawtoothSyncWrapper("You are a helpful assistant.", config=config) as memory:
-
-        # 1. Instantly write to the background thread
         memory.add_message("user", "Hello world!")
-
-        # 2. Safely read the compiled state machine
         prompt = memory.build_prompt()
-
         return prompt
-
-
 ```
 
 ### 5. Recall Explainability Traces
