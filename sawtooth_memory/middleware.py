@@ -26,22 +26,28 @@ from typing import Any, Literal, Optional
 
 from .compressor import CloudCompressor, OllamaCompressor
 from .config import ContextManagerConfig
+from .dte_runtime import (
+    account_main_prompt_tokens,
+    apply_fold_delta_to_pool,
+    apply_observation_crush,
+    merge_pool_into_state,
+    pool_content_fingerprint,
+    prepare_consolidation,
+    prompt_turn_key,
+)
 from .embeddings.factory import create_embedding_provider
 from .events.bus import EventBus, get_event_bus
 from .events.types import (
     CompressionCycleStartEvent,
-    DTEFoldCreatedEvent,
     EntityAnchoredEvent,
     L1EvictionEvent,
 )
 from .exceptions import TokenLimitExceededError
-from .fold_unit import create_fold_unit, fold_lines, remove_fold_lines
+from .fold_unit import create_fold_unit
 from .intent_planner import PromptIntentPlan, plan_prompt
 from .journal import AsyncCompressionJournal
 from .l3_indexer import SemanticIndexer
 from .monitor import TokenMonitor
-from .novelty import residualize
-from .observation_crush import crush_observation
 from .prompt_compiler import (
     compile_prompt,
     format_l3_retrieval_block,
@@ -247,6 +253,9 @@ class ContextManager:
 
         self._last_l3_retrieval: list[dict[str, Any]] = []
         self._observation_cache: OrderedDict[str, str] = OrderedDict()
+        self._state_dirty: bool = False
+        self._prompt_turn_key: tuple | None = None
+        self._last_pool_fingerprint: str | None = None
 
         logger.debug(
             f"ContextManager initialised. "
@@ -279,6 +288,7 @@ class ContextManager:
         await self._worker.start()
 
     async def stop(self) -> None:
+        await self._persist_state(force=True)
         await self._worker.stop()
         if self._embedder is not None and hasattr(self._embedder, "close"):
             await self._embedder.close()
@@ -295,6 +305,18 @@ class ContextManager:
 
     async def __aexit__(self, *_) -> None:
         await self.stop()
+
+    def _mark_state_dirty(self) -> None:
+        self._state_dirty = True
+
+    async def _persist_state(self, *, force: bool = False) -> None:
+        adapter = self._config.storage_adapter
+        if not adapter:
+            return
+        if not force and not self._state_dirty:
+            return
+        await adapter.save_state(self._config.session_id, self._state)
+        self._state_dirty = False
 
     # ------------------------------------------------------------------
     # Core API
@@ -314,27 +336,19 @@ class ContextManager:
         When events are enabled, this method emits L1 eviction events
         and compression start events.
         """
-        stored_content = content
-        if self._config.enable_observation_crush and role == "tool":
-            crushed = crush_observation(
-                content,
-                count_text=self._monitor.count_text,
-                min_tokens=self._config.obs_crush_min_tokens,
-            )
-            stored_content = crushed.content
-            if crushed.crushed and crushed.cache_id:
-                self._observation_cache[crushed.cache_id] = content
-                self._observation_cache.move_to_end(crushed.cache_id)
-                while (
-                    len(self._observation_cache)
-                    > self._config.obs_cache_max_entries
-                ):
-                    self._observation_cache.popitem(last=False)
-                self._state.dte.observation_tokens_saved += crushed.tokens_saved
+        stored_content = apply_observation_crush(
+            role,
+            content,
+            config=self._config,
+            count_text=self._monitor.count_text,
+            cache=self._observation_cache,
+            dte=self._state.dte,
+        )
 
         msg = Message(role=role, content=stored_content)
         msg.token_count = self._monitor.count_message(msg)
         self._state.l1_working.append(msg)
+        self._mark_state_dirty()
 
         if (
             self._config.enable_ingest_entity_scan
@@ -365,10 +379,8 @@ class ContextManager:
         elif self._monitor.should_trigger_compression(self._state):
             await self._trigger_compression()
 
-        if self._config.storage_adapter:
-            await self._config.storage_adapter.save_state(
-                self._config.session_id, self._state
-            )
+        if self._config.persist_every_message:
+            await self._persist_state(force=True)
 
     def retrieve_observation(self, cache_id: str) -> str | None:
         """Return a raw tool observation retained by Observation Crush."""
@@ -392,10 +404,8 @@ class ContextManager:
         finally:
             active_strategy_context.reset(token)
 
-        if self._config.storage_adapter:
-            await self._config.storage_adapter.save_state(
-                self._config.session_id, self._state
-            )
+        self._mark_state_dirty()
+        await self._persist_state(force=True)
 
     async def _scan_message_entities(self, content: str) -> None:
         """Lightweight ingest-time entity scan for the live L1 window."""
@@ -410,6 +420,7 @@ class ContextManager:
             self._state.l1_5_entities.upsert(extraction.entities)
         finally:
             active_strategy_context.reset(token)
+        self._mark_state_dirty()
 
     async def _sync_pool_state_from_storage(self) -> None:
         adapter = self._config.storage_adapter
@@ -422,18 +433,13 @@ class ContextManager:
             return
 
         pool_entities, pool_archive = pool_state
+        fingerprint = pool_content_fingerprint(pool_entities, pool_archive)
+        if fingerprint == self._last_pool_fingerprint:
+            return
 
-        for key, history in pool_entities.entities.items():
-            for value in history:
-                self._state.l1_5_entities.upsert({key: value})
-
-        pool_narrative = pool_archive.narrative.strip()
-        if pool_narrative:
-            local_narrative = self._state.l2_archival.narrative.strip()
-            if not local_narrative:
-                self._state.l2_archival.narrative = pool_narrative
-            elif pool_narrative not in local_narrative:
-                self._state.l2_archival.append_narrative(pool_narrative)
+        merge_pool_into_state(self._state, pool_entities, pool_archive)
+        self._last_pool_fingerprint = fingerprint
+        self._mark_state_dirty()
 
     async def _sync_fold_to_pool(
         self, narrative: str, entity_keys: tuple[str, ...]
@@ -451,14 +457,18 @@ class ContextManager:
         else:
             shared_entities, shared_archive = pool_state
 
-        for key in entity_keys:
-            value = self._state.l1_5_entities.get_latest(key)
-            if value is not None:
-                shared_entities.upsert({key: value})
-        shared_archive.append_narrative(
-            f"[origin:{self._config.session_id}] {narrative}"
+        apply_fold_delta_to_pool(
+            session_id=self._config.session_id,
+            fold_stub=narrative,
+            entity_keys=entity_keys,
+            local_entities=self._state.l1_5_entities,
+            shared_entities=shared_entities,
+            shared_archive=shared_archive,
         )
         await adapter.save_pool_state(pool_id, shared_entities, shared_archive)
+        self._last_pool_fingerprint = pool_content_fingerprint(
+            shared_entities, shared_archive
+        )
 
     async def _retrieve_l3_chunks(
         self,
@@ -535,80 +545,37 @@ class ContextManager:
         prompt_tokens = sum(
             self._monitor.count_text(message["content"]) for message in result.messages
         )
-        self._state.dte.main_prompt_tokens += prompt_tokens
+        self._prompt_turn_key = account_main_prompt_tokens(
+            self._state.dte,
+            prompt_tokens,
+            previous_key=self._prompt_turn_key,
+            current_key=prompt_turn_key(self._state),
+        )
         self._maybe_enqueue_consolidation(intent_plan)
+        await self._persist_state()
         return result.messages
 
     def _maybe_enqueue_consolidation(self, intent_plan: PromptIntentPlan) -> None:
         """Queue one residual-only L2 consolidation when debt and spend permit."""
-        if (
-            self._config.compression_mode != "dte"
-            or not self._config.consolidation_on_idle
-            or self._state.dte.consolidation_queued
-        ):
-            return
-
-        debt = self._state.dte.narrative_debt_tokens
-        if debt <= 0:
-            return
-        if (
-            debt < self._config.narrative_debt_trigger_tokens
-            and not intent_plan.prefers_narrative
-        ):
-            return
-
-        folds = fold_lines(self._state.l2_archival.narrative)
-        if not folds:
-            self._state.dte.narrative_debt_tokens = 0
-            return
-
-        source = "\n".join(folds)
-        residual = source
-        if self._config.enable_novelty_filter:
-            novelty = residualize(
-                source,
-                self._state.l1_5_entities,
-                self._state.l2_archival.narrative,
-                count_text=self._monitor.count_text,
-            )
-            residual = novelty.residual
-            if (
-                not residual
-                or novelty.residual_ratio < self._config.novelty_min_residual
-            ):
-                self._state.l2_archival.narrative = remove_fold_lines(
-                    self._state.l2_archival.narrative
-                )
-                self._state.dte.narrative_debt_tokens = 0
-                self._state.dte.folds_since_narrative = 0
-                self._state.dte.novelty_skips += 1
-                return
-
-        guideline = self._config.compression_guideline or (
-            "Consolidate these structured fold outcomes into one dense, "
-            "causal narrative. Do not repeat exact identifiers already protected "
-            "by the entity ledger."
-        )
-        content = f"{guideline}\n\n{residual}"
-        message = Message(role="system", content=content)
-        message.token_count = self._monitor.count_message(message)
-
-        allowance = int(
-            self._state.dte.main_prompt_tokens
-            * self._config.background_spend_ratio
-        )
-        projected = (
-            self._state.dte.background_llm_input_tokens + message.token_count
-        )
-        if projected > allowance:
-            return
-
         import uuid
 
+        prep = prepare_consolidation(
+            self._state,
+            self._config,
+            intent_plan,
+            count_text=self._monitor.count_text,
+            count_message=self._monitor.count_message,
+        )
+        if prep is None or prep.novelty_skipped or prep.message is None:
+            if prep is not None and prep.novelty_skipped:
+                self._mark_state_dirty()
+            return
+
         self._state.dte.consolidation_queued = True
+        self._mark_state_dirty()
         self._worker.enqueue(
             CompressionTask(
-                messages=[message],
+                messages=[prep.message],
                 state=self._state,
                 cycle_id=f"consolidate-{uuid.uuid4()}",
                 task_kind="consolidate",
@@ -621,9 +588,8 @@ class ContextManager:
         """
         Retrieve L3 semantic chunks similar to *query*.
 
-        This is the storage-layer retrieval API. Results are **not**
-        injected into :meth:`build_prompt` until a future release wires
-        RAG retrieval into the prompt compiler.
+        When ``enable_l3_prompt_retrieval`` is on, :meth:`build_prompt` may also
+        inject a budgeted L3 block. This method remains the explicit storage-layer API.
         """
         if not self._l3_indexer:
             return []
@@ -761,62 +727,63 @@ class ContextManager:
 
         cycle_id = str(uuid.uuid4())
 
-        # Emit start event if bus exists
+        # Emit start / eviction telemetry without blocking the ingest path.
         if self._event_bus:
-            await self._event_bus.emit(
-                CompressionCycleStartEvent(
-                    cycle_id=cycle_id,
-                    current_l1_tokens=self._state.l1_working.token_count,
-                    chunk_size=self._config.chunk_size,
+            import asyncio
+
+            evicted_tokens = sum(m.token_count for m in chunk)
+            asyncio.create_task(
+                self._event_bus.emit(
+                    CompressionCycleStartEvent(
+                        cycle_id=cycle_id,
+                        current_l1_tokens=self._state.l1_working.token_count,
+                        chunk_size=self._config.chunk_size,
+                    )
                 )
             )
-
-        # Emit L1 eviction event (this compression will evict these messages)
-        if self._event_bus:
-            evicted_tokens = sum(m.token_count for m in chunk)
-            await self._event_bus.emit(
-                L1EvictionEvent(
-                    tokens_evicted=evicted_tokens,
-                    messages_evicted=len(chunk),
-                    tokens_remaining_l1=self._state.l1_working.token_count,
-                    evicted_message_ids=[m.id for m in chunk],
-                    trigger="soft_limit_exceeded",
-                    cycle_id=cycle_id,  # link to compression cycle
+            asyncio.create_task(
+                self._event_bus.emit(
+                    L1EvictionEvent(
+                        tokens_evicted=evicted_tokens,
+                        messages_evicted=len(chunk),
+                        tokens_remaining_l1=self._state.l1_working.token_count,
+                        evicted_message_ids=[m.id for m in chunk],
+                        trigger="soft_limit_exceeded",
+                        cycle_id=cycle_id,
+                    )
                 )
             )
 
         if self._config.compression_mode == "dte":
             messages_text = _messages_to_text(chunk)
-            l3_chunks = await self._worker.index_l3_semantic(
-                self._state, messages_text, cycle_id
-            )
             fold = create_fold_unit(
                 chunk,
                 self._state,
                 self._worker.ner_pipeline,
                 cycle_id=cycle_id,
-                l3_chunks=l3_chunks,
+                l3_chunks=0,
                 enable_ner=self._config.enable_deterministic_ner,
+                messages_text=messages_text,
+                mark_l3_recoverable=self._l3_indexer is not None,
             )
-            await self._sync_fold_to_pool(fold.stub, fold.entity_keys)
-            if self._event_bus:
-                await self._event_bus.emit(
-                    DTEFoldCreatedEvent(
-                        cycle_id=cycle_id,
-                        messages_folded=len(chunk),
-                        tokens_evicted=fold.tokens_evicted,
-                        entity_keys=list(fold.entity_keys),
-                        l3_chunks_indexed=fold.l3_chunks,
-                        recoverable=fold.l3_chunks > 0,
-                    )
+            self._mark_state_dirty()
+            self._worker.enqueue(
+                CompressionTask(
+                    messages=chunk,
+                    state=self._state,
+                    cycle_id=cycle_id,
+                    task_kind="fold_finalize",
+                    fold_stub=fold.stub,
+                    entity_keys=fold.entity_keys,
+                    tokens_evicted=fold.tokens_evicted,
                 )
+            )
             self._monitor.release_compression_lock()
             logger.info(
-                "DTE fold: externalized %d messages (%d tokens, %d L3 chunks), "
+                "DTE fold: externalized %d messages (%d tokens) for async finalize, "
                 "cycle_id=%s.",
                 len(chunk),
                 fold.tokens_evicted,
-                fold.l3_chunks,
                 cycle_id,
             )
             return
@@ -828,6 +795,7 @@ class ContextManager:
             cycle_id=cycle_id,
         )
         self._worker.enqueue(task)
+        self._mark_state_dirty()
 
         logger.info(
             f"Compression triggered: offloaded {len(chunk)} messages to worker. "
@@ -840,30 +808,55 @@ class ContextManager:
         Hard-limit fallback: discard the oldest messages immediately on
         the main thread without waiting for Ollama/Cloud.
 
-        When L3 is enabled, evicted text is still indexed into semantic
-        storage so retrieval remains possible after truncation.
+        In DTE mode this creates a fold stub and defers L3/pool work to the
+        worker. In always_llm mode, L3 is still indexed when enabled.
 
         Note: This does NOT emit compression cycle events because it's a
         fallback path. The journal remains unaffected.
         """
+        import uuid
+
         chunk = self._state.l1_working.slice_oldest(self._config.chunk_size)
         if not chunk:
             return
 
-        if self._l3_indexer:
-            import uuid
-
+        cycle_id = f"hard-truncate-{uuid.uuid4()}"
+        if self._config.compression_mode == "dte":
             messages_text = _messages_to_text(chunk)
-            cycle_id = f"hard-truncate-{uuid.uuid4()}"
-            await self._worker.index_l3_semantic(
-                self._state, messages_text, cycle_id
+            fold = create_fold_unit(
+                chunk,
+                self._state,
+                self._worker.ner_pipeline,
+                cycle_id=cycle_id,
+                l3_chunks=0,
+                enable_ner=self._config.enable_deterministic_ner,
+                messages_text=messages_text,
+                mark_l3_recoverable=self._l3_indexer is not None,
             )
+            self._worker.enqueue(
+                CompressionTask(
+                    messages=chunk,
+                    state=self._state,
+                    cycle_id=cycle_id,
+                    task_kind="fold_finalize",
+                    fold_stub=fold.stub,
+                    entity_keys=fold.entity_keys,
+                    tokens_evicted=fold.tokens_evicted,
+                )
+            )
+        else:
+            if self._l3_indexer:
+                messages_text = _messages_to_text(chunk)
+                await self._worker.index_l3_semantic(
+                    self._state, messages_text, cycle_id
+                )
+            note = (
+                f"[HARD TRUNCATION: {len(chunk)} messages dropped because the "
+                f"compression worker has not yet caught up.]"
+            )
+            self._state.l2_archival.append_narrative(note)
 
-        note = (
-            f"[HARD TRUNCATION: {len(chunk)} messages dropped because the "
-            f"compression worker has not yet caught up.]"
-        )
-        self._state.l2_archival.append_narrative(note)
+        self._mark_state_dirty()
         logger.warning(f"Hard truncation: dropped {len(chunk)} messages from L1.")
 
         # The soft-limit path may have queued compression before we got here.

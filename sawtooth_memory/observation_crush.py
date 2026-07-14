@@ -12,6 +12,8 @@ _IMPORTANT_LOG = re.compile(
     r"\b(error|exception|fatal|failed|failure|warning|warn|traceback|panic)\b",
     re.IGNORECASE,
 )
+# Rough header overhead for the crushed envelope (chars).
+_WRAP_OVERHEAD = 96
 
 
 @dataclass(frozen=True)
@@ -42,6 +44,11 @@ def crush_observation(
     The caller owns storage of the original under ``cache_id``. Small inputs and
     transformations that do not save tokens pass through byte-for-byte.
     """
+    # Fast reject: even dense text is rarely >1 token/char.
+    if len(content) < min_tokens:
+        original_tokens = count_text(content) if content else 0
+        return ObservationCrushResult(content, original_tokens, original_tokens)
+
     original_tokens = count_text(content)
     if original_tokens < min_tokens:
         return ObservationCrushResult(content, original_tokens, original_tokens)
@@ -49,6 +56,10 @@ def crush_observation(
     compact, strategy = _compact_json(content)
     if compact is None:
         compact, strategy = _compact_log(content), "log"
+
+    # Char-level early exit avoids hashing + second tokenize when clearly larger.
+    if len(compact) + _WRAP_OVERHEAD >= len(content):
+        return ObservationCrushResult(content, original_tokens, original_tokens)
 
     cache_id = f"obs_{hashlib.sha256(content.encode()).hexdigest()[:12]}"
     wrapped = (

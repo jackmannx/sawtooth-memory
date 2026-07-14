@@ -60,8 +60,9 @@ class WorkingMemory(BaseModel):
     def slice_oldest(self, n: int) -> list[Message]:
         """Remove and return the oldest n messages, updating token count."""
         chunk = self.messages[:n]
+        removed = sum(m.token_count for m in chunk)
         self.messages = self.messages[n:]
-        self.token_count = sum(m.token_count for m in self.messages)
+        self.token_count = max(0, self.token_count - removed)
         return chunk
 
 

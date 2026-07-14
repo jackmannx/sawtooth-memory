@@ -88,9 +88,14 @@ def ledger_covers(query: str, ledger: EntityLedger) -> bool:
     query_terms = {term.casefold() for term in _WORD.findall(query)}
     if not query_terms:
         return False
+    return bool(query_terms & ledger_term_set(ledger))
+
+
+def ledger_term_set(ledger: EntityLedger) -> set[str]:
+    """Tokenize ledger keys/values once for coverage checks."""
     known_terms: set[str] = set()
     for key, history in ledger.entities.items():
         known_terms.update(term.casefold() for term in _WORD.findall(key))
         for value in history:
             known_terms.update(term.casefold() for term in _WORD.findall(value))
-    return bool(query_terms & known_terms)
+    return known_terms

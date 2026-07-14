@@ -27,17 +27,19 @@ from .compression_core import (
     run_compression_cycle_async,
 )
 from .compressor import CloudCompressor, OllamaCompressor
+from .dte_runtime import apply_fold_delta_to_pool
 from .events.bus import EventBus
 from .events.types import (
     CompressionCycleCompleteEvent,
     CompressionCycleFailedEvent,
+    DTEFoldCreatedEvent,
     L2SummaryGeneratedEvent,
     L3VectorIndexedEvent,
 )
 from .fold_unit import remove_fold_lines
 from .l3_indexer import SemanticIndexer
 from .ner import NERPipeline
-from .state import MemoryState, Message
+from .state import ArchivalMemory, EntityLedger, MemoryState, Message
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +53,10 @@ class CompressionTask:
     messages: list[Message]
     state: MemoryState
     cycle_id: str = ""  # Unique ID for this compression cycle (for event correlation)
-    task_kind: Literal["compress", "consolidate"] = "compress"
+    task_kind: Literal["compress", "consolidate", "fold_finalize"] = "compress"
+    fold_stub: str = ""
+    entity_keys: tuple[str, ...] = ()
+    tokens_evicted: int = 0
 
 
 def _messages_to_text(messages: list[Message]) -> str:
@@ -199,6 +204,10 @@ class CompressionWorker:
     # ------------------------------------------------------------------
 
     async def _process(self, task: CompressionTask) -> None:
+        if task.task_kind == "fold_finalize":
+            await self._finalize_fold(task)
+            return
+
         cycle_input = CompressionCycleInput(
             messages=task.messages,
             state=task.state,
@@ -323,6 +332,67 @@ class CompressionWorker:
         finally:
             if task.task_kind == "consolidate":
                 task.state.dte.consolidation_queued = False
+
+    async def _finalize_fold(self, task: CompressionTask) -> None:
+        """Index L3 and sync pool for a DTE fold without blocking ingest."""
+        messages_text = messages_to_text(task.messages)
+        l3_chunks = await self._index_l3_semantic(
+            task.state, messages_text, task.cycle_id
+        )
+
+        if self._storage_adapter and self._pool_id and task.fold_stub:
+            try:
+                pool_state = await self._storage_adapter.load_pool_state(self._pool_id)
+                if pool_state is None:
+                    shared_entities = EntityLedger()
+                    shared_archive = ArchivalMemory()
+                else:
+                    shared_entities, shared_archive = pool_state
+                apply_fold_delta_to_pool(
+                    session_id=self._session_id,
+                    fold_stub=task.fold_stub,
+                    entity_keys=task.entity_keys,
+                    local_entities=task.state.l1_5_entities,
+                    shared_entities=shared_entities,
+                    shared_archive=shared_archive,
+                )
+                await self._storage_adapter.save_pool_state(
+                    self._pool_id, shared_entities, shared_archive
+                )
+            except Exception as exc:
+                logger.warning(
+                    "CompressionWorker: fold pool sync failed (%s).",
+                    exc,
+                    exc_info=True,
+                )
+
+        if self._event_bus:
+            asyncio.create_task(
+                self._event_bus.emit(
+                    DTEFoldCreatedEvent(
+                        cycle_id=task.cycle_id,
+                        messages_folded=len(task.messages),
+                        tokens_evicted=task.tokens_evicted,
+                        entity_keys=list(task.entity_keys),
+                        l3_chunks_indexed=l3_chunks,
+                        recoverable=l3_chunks > 0,
+                    )
+                )
+            )
+            if l3_chunks:
+                asyncio.create_task(
+                    self._event_bus.emit(
+                        L3VectorIndexedEvent(
+                            session_id=self._session_id,
+                            cycle_id=task.cycle_id,
+                            chunks_indexed=l3_chunks,
+                            total_chunks=task.state.l3_semantic.chunk_count,
+                            source_chars=len(messages_text),
+                            embedding_backend=self._embedding_backend,
+                            embedding_model=self._embedding_model,
+                        )
+                    )
+                )
 
     async def _index_l3_semantic(
         self,
