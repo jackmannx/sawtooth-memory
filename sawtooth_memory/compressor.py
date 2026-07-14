@@ -10,7 +10,6 @@ Handles:
 from __future__ import annotations
 
 import logging
-import re
 
 import httpx
 from tenacity import (
@@ -24,6 +23,7 @@ from sawtooth_memory.compression_utils import (
     COMPRESSION_SYSTEM_PROMPT,
     normalize_compression_result,
     parse_compression_json,
+    prune_compression_input,
 )
 from sawtooth_memory.config import CloudConfig, OllamaConfig
 from sawtooth_memory.entity_guard import build_compression_user_content
@@ -32,29 +32,10 @@ from sawtooth_memory.providers import ProviderAdapter, get_adapter
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Pre-processing regexes
-# ---------------------------------------------------------------------------
-
-# Base64-like strings over 80 chars (avoids mangling normal text)
-_BASE64_RE = re.compile(r"[A-Za-z0-9+/]{80,}={0,2}")
-
-# Python / JS stack traces
-_STACKTRACE_RE = re.compile(
-    r"Traceback \(most recent call last\):.*?(?=\n\n|\Z)",
-    re.DOTALL,
-)
-
-# Long runs of whitespace-separated hex (e.g. binary output)
-_HEX_RE = re.compile(r"(?:[0-9a-fA-F]{2}\s){16,}")
-
 
 def _prune(raw: str) -> str:
     """Strip noise that wastes compressor tokens without adding meaning."""
-    text = _BASE64_RE.sub("[BASE64_REMOVED]", raw)
-    text = _STACKTRACE_RE.sub("[STACKTRACE_REMOVED]", text)
-    text = _HEX_RE.sub("[HEX_REMOVED]", text)
-    return text
+    return prune_compression_input(raw)
 
 
 # ---------------------------------------------------------------------------

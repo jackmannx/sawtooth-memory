@@ -221,6 +221,25 @@ class ContextManagerConfig(BaseModel):
     ollama: Optional[OllamaConfig] = None
     cloud: Optional[CloudConfig] = None
 
+    @classmethod
+    def for_sync_script(
+        cls,
+        *,
+        soft_limit_tokens: int = 2000,
+        **overrides: Any,
+    ) -> "ContextManagerConfig":
+        """
+        Sensible defaults for linear scripts and WSGI apps using SyncContextManager.
+
+        Disables L3 semantic storage by default (async storage adapters). Override
+        any field via **overrides.
+        """
+        return cls(
+            soft_limit_tokens=soft_limit_tokens,
+            enable_l3_semantic_storage=False,
+            **overrides,
+        )
+
     @model_validator(mode="after")
     def __v2_normalize_dual_model_architecture__(self) -> "ContextManagerConfig":
         """

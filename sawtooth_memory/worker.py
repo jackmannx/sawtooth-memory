@@ -18,10 +18,15 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Union
+from typing import Any, Optional, Union
 
+from .compression_core import (
+    CompressionCycleInput,
+    CompressionEngineConfig,
+    messages_to_text,
+    run_compression_cycle_async,
+)
 from .compressor import CloudCompressor, OllamaCompressor
-from .entity_guard import apply_entity_guard, build_protected_entities
 from .events.bus import EventBus
 from .events.types import (
     CompressionCycleCompleteEvent,
@@ -29,10 +34,9 @@ from .events.types import (
     L2SummaryGeneratedEvent,
     L3VectorIndexedEvent,
 )
-from .exceptions import CompressionError, OllamaConnectionError
 from .l3_indexer import SemanticIndexer
-from .ner import NERPipeline, active_strategy_context
-from .state import ArchivalMemory, EntityLedger, MemoryState, Message
+from .ner import NERPipeline
+from .state import MemoryState, Message
 
 logger = logging.getLogger(__name__)
 
@@ -49,11 +53,8 @@ class CompressionTask:
 
 
 def _messages_to_text(messages: list[Message]) -> str:
-    """Flatten a message list to a readable string for the compressor."""
-    parts = []
-    for msg in messages:
-        parts.append(f"{msg.role.upper()}: {msg.content}")
-    return "\n\n".join(parts)
+    """Backward-compatible alias for middleware imports."""
+    return messages_to_text(messages)
 
 
 class CompressionWorker:
@@ -102,7 +103,6 @@ class CompressionWorker:
         self._processed: int = 0
         self._failed: int = 0
 
-        # Initialize the NER Pipeline
         self._enable_ner = enable_deterministic_ner
         self._enable_entity_verifier = enable_entity_verifier
         self._ner_pipeline = NERPipeline.from_config(
@@ -111,6 +111,15 @@ class CompressionWorker:
             enable_salience=enable_salience_extractor,
             salience_threshold=salience_threshold,
             salience_max_entities=salience_max_entities,
+        )
+        self._engine = CompressionEngineConfig(
+            ner_pipeline=self._ner_pipeline,
+            enable_ner=self._enable_ner,
+            fallback_truncate=self._fallback_truncate,
+            enable_entity_verifier=self._enable_entity_verifier,
+            storage_adapter=self._storage_adapter,
+            pool_id=self._pool_id,
+            session_id=self._session_id,
         )
 
     # ------------------------------------------------------------------
@@ -188,186 +197,83 @@ class CompressionWorker:
     # ------------------------------------------------------------------
 
     async def _process(self, task: CompressionTask) -> None:
-        state = task.state
-        messages_text = _messages_to_text(task.messages)
-        cycle_id = task.cycle_id
-        start_time = asyncio.get_running_loop().time()
-
-        try:
-            # 1. Run local deterministic + salience extraction
-            extraction = self._ner_pipeline.extract_with_metadata(messages_text)
-            protected_entities = build_protected_entities(extraction)
-
-            # 2. Execute background LLM compression with protection manifest
-            result = await self._compressor.compress(
-                messages_text,
-                protected_entities=protected_entities or None,
-            )
-            duration_ms = int((asyncio.get_running_loop().time() - start_time) * 1000)
-
-            narrative = result.get("narrative_summary", "").strip()
-            llm_entities = result.get("extracted_entities", {})
-            original_tokens = self._estimate_tokens(messages_text)
-            compressed_tokens = self._estimate_tokens(narrative)
-
-            # 3. Secure merge + post-merge verification
-            combined_entities, strategy_map = apply_entity_guard(
-                extraction,
-                llm_entities,
-                narrative,
-                enable_verifier=self._enable_entity_verifier,
-            )
-            result["extracted_entities"] = combined_entities
-
-            # 4. Bind context token and merge into state securely
-            token = active_strategy_context.set(strategy_map)
-            try:
-                self._merge(state, result)
-            finally:
-                active_strategy_context.reset(token)
-
-            try:
-                await self._sync_pool_state(combined_entities, narrative)
-            except Exception as exc:
-                logger.warning(
-                    "CompressionWorker: failed to sync pool state (%s).",
-                    exc,
-                    exc_info=True,
-                )
-
-            chunks_indexed = await self._index_l3_semantic(state, messages_text, cycle_id)
-
-            # 6. Emit existing L2SummaryGeneratedEvent and CompressionCycleCompleteEvent
-            if self._event_bus:
-                asyncio.create_task(
-                    self._event_bus.emit(
-                        L2SummaryGeneratedEvent(
-                            summary_text=narrative,
-                            compressed_message_count=len(task.messages),
-                            original_tokens=original_tokens,
-                            compressed_tokens=compressed_tokens,
-                            compression_ratio=original_tokens
-                            / max(compressed_tokens, 1),
-                            provider=self._get_provider_name(),
-                            model=self._get_model_name(),
-                            compression_duration_ms=duration_ms,
-                            fallback_used=False,
-                            cycle_id=cycle_id,
-                        )
-                    )
-                )
-
-            if self._event_bus:
-                tokens_evicted = sum(m.token_count for m in task.messages)
-                asyncio.create_task(
-                    self._event_bus.emit(
-                        CompressionCycleCompleteEvent(
-                            l1_tokens_evicted=tokens_evicted,
-                            l1_5_entities_retained=combined_entities,
-                            l2_summary_generated=narrative,
-                            messages_compressed=len(task.messages),
-                            final_l1_tokens=state.l1_working.token_count,
-                            total_duration_ms=duration_ms,
-                            cycle_id=cycle_id,
-                        )
-                    )
-                )
-
-            logger.info(
-                f"CompressionWorker: compressed {len(task.messages)} messages → "
-                f"narrative ({len(narrative)} chars), "
-                f"{len(combined_entities)} entities extracted, "
-                f"{chunks_indexed} L3 chunk(s) indexed (cycle {cycle_id})."
-            )
-
-        except (OllamaConnectionError, CompressionError) as exc:
-            logger.warning(
-                f"CompressionWorker: compression failed ({exc}). "
-                f"fallback_truncate={self._fallback_truncate}, cycle={cycle_id}"
-            )
-            if self._event_bus:
-                asyncio.create_task(
-                    self._event_bus.emit(
-                        CompressionCycleFailedEvent(
-                            error_type=type(exc).__name__,
-                            error_message=str(exc),
-                            fallback_triggered=self._fallback_truncate,
-                            cycle_id=cycle_id,
-                        )
-                    )
-                )
-
-            if self._fallback_truncate:
-                self._fallback_merge(state, task.messages)
-                await self._index_l3_semantic(state, messages_text, cycle_id)
-            else:
-                raise
-
-    # ------------------------------------------------------------------
-    # State merging
-    # ------------------------------------------------------------------
-
-    def _merge(self, state: MemoryState, result: Dict[str, Any]) -> None:
-        narrative = result.get("narrative_summary", "").strip()
-        entities = result.get("extracted_entities", {})
-
-        if narrative:
-            state.l2_archival.append_narrative(narrative)
-            logger.debug("CompressionWorker: appended narrative to L2.")
-
-        if entities:
-            # This upsert will call the entity event callback if set on the ledger
-            state.l1_5_entities.upsert(entities)
-            logger.debug(
-                f"CompressionWorker: upserted {len(entities)} entities into L1.5."
-            )
-
-    def _fallback_merge(self, state: MemoryState, messages: list[Message]) -> None:
-        messages_text = _messages_to_text(messages)
-
-        if self._enable_ner:
-            extraction = self._ner_pipeline.extract_with_metadata(messages_text)
-            if extraction.entities:
-                token = active_strategy_context.set(extraction.strategies)
-                try:
-                    state.l1_5_entities.upsert(extraction.entities)
-                finally:
-                    active_strategy_context.reset(token)
-
-        note = (
-            f"[COMPRESSION UNAVAILABLE: {len(messages)} messages were truncated. "
-            f"First message role: {messages[0].role if messages else 'unknown'}]"
+        cycle_input = CompressionCycleInput(
+            messages=task.messages,
+            state=task.state,
+            cycle_id=task.cycle_id,
         )
-        state.l2_archival.append_narrative(note)
-        logger.warning("CompressionWorker: fallback truncation note written to L2.")
 
-    async def _sync_pool_state(
-        self, entities_delta: dict[str, str], narrative_delta: str
-    ) -> None:
-        """
-        Persist shared L1.5/L2 state for multi-agent pools after compression.
-        """
-        adapter = self._storage_adapter
-        pool_id = self._pool_id
-        if not adapter or not pool_id:
-            return
+        async def on_success(outcome) -> None:
+            if not self._event_bus:
+                return
+            asyncio.create_task(
+                self._event_bus.emit(
+                    L2SummaryGeneratedEvent(
+                        summary_text=outcome.narrative,
+                        compressed_message_count=len(task.messages),
+                        original_tokens=outcome.original_tokens,
+                        compressed_tokens=outcome.compressed_tokens,
+                        compression_ratio=outcome.original_tokens
+                        / max(outcome.compressed_tokens, 1),
+                        provider=self._get_provider_name(),
+                        model=self._get_model_name(),
+                        compression_duration_ms=outcome.duration_ms,
+                        fallback_used=False,
+                        cycle_id=task.cycle_id,
+                    )
+                )
+            )
+            tokens_evicted = sum(m.token_count for m in task.messages)
+            asyncio.create_task(
+                self._event_bus.emit(
+                    CompressionCycleCompleteEvent(
+                        l1_tokens_evicted=tokens_evicted,
+                        l1_5_entities_retained=outcome.combined_entities,
+                        l2_summary_generated=outcome.narrative,
+                        messages_compressed=len(task.messages),
+                        final_l1_tokens=task.state.l1_working.token_count,
+                        total_duration_ms=outcome.duration_ms,
+                        cycle_id=task.cycle_id,
+                    )
+                )
+            )
+            if outcome.chunks_indexed and self._event_bus:
+                asyncio.create_task(
+                    self._event_bus.emit(
+                        L3VectorIndexedEvent(
+                            session_id=self._session_id,
+                            cycle_id=task.cycle_id,
+                            chunks_indexed=outcome.chunks_indexed,
+                            total_chunks=task.state.l3_semantic.chunk_count,
+                            source_chars=len(messages_to_text(task.messages)),
+                            embedding_backend=self._embedding_backend,
+                            embedding_model=self._embedding_model,
+                        )
+                    )
+                )
 
-        pool_state = await adapter.load_pool_state(pool_id)
-        if pool_state is None:
-            shared_entities = EntityLedger()
-            shared_archive = ArchivalMemory()
-        else:
-            shared_entities, shared_archive = pool_state
-
-        if entities_delta:
-            shared_entities.upsert(entities_delta)
-
-        if narrative_delta.strip():
-            shared_archive.append_narrative(
-                f"[origin:{self._session_id}] {narrative_delta.strip()}"
+        async def on_failure(outcome) -> None:
+            if not self._event_bus:
+                return
+            asyncio.create_task(
+                self._event_bus.emit(
+                    CompressionCycleFailedEvent(
+                        error_type=outcome.error_type or "Unknown",
+                        error_message=outcome.error_message or "",
+                        fallback_triggered=outcome.fallback_used,
+                        cycle_id=task.cycle_id,
+                    )
+                )
             )
 
-        await adapter.save_pool_state(pool_id, shared_entities, shared_archive)
+        await run_compression_cycle_async(
+            cycle_input,
+            self._compressor,
+            self._engine,
+            index_l3=self._index_l3_semantic,
+            on_success=on_success,
+            on_failure=on_failure,
+        )
 
     async def _index_l3_semantic(
         self,
@@ -402,21 +308,6 @@ class CompressionWorker:
                     exc_info=True,
                 )
 
-        if chunks_indexed and self._event_bus:
-            asyncio.create_task(
-                self._event_bus.emit(
-                    L3VectorIndexedEvent(
-                        session_id=self._session_id,
-                        cycle_id=cycle_id,
-                        chunks_indexed=chunks_indexed,
-                        total_chunks=state.l3_semantic.chunk_count,
-                        source_chars=len(messages_text),
-                        embedding_backend=self._embedding_backend,
-                        embedding_model=self._embedding_model,
-                    )
-                )
-            )
-
         return chunks_indexed
 
     async def index_l3_semantic(
@@ -436,12 +327,6 @@ class CompressionWorker:
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
-
-    def _estimate_tokens(self, text: str) -> int:
-        """Rough token estimation (uses tiktoken if available, else rough)."""
-        # We could inject a tokenizer, but for event metrics an approximation is fine.
-        # For accurate counts, the monitor uses tiktoken. Here we keep it simple.
-        return len(text) // 4  # Very rough: 4 chars per token
 
     def _get_provider_name(self) -> str:
         """Return a human-readable provider name."""

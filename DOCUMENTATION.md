@@ -198,7 +198,28 @@ v2_config = ContextManagerConfig(background_model="gpt-4o-mini")
 
 ## 5. API & Usage Guide
 
-### Initialization & Context Lifecycles
+### Sync-native API (scripts and WSGI)
+
+For linear scripts, Flask, Django, and CLI tools, use `SyncContextManager`. It provides the full L0–L2 tier model and entity guard without asyncio or a background worker. Compression runs **inline** on the calling thread when limits are reached.
+
+```python
+from sawtooth_memory import SyncContextManager, ContextManagerConfig
+
+config = ContextManagerConfig.for_sync_script(soft_limit_tokens=1500)
+
+with SyncContextManager(system_prompt="You are an expert.", config=config) as memory:
+    memory.add_message("user", "Hello.")
+    memory.add_message("assistant", "Hi there.")
+    payload = memory.build_prompt()
+    memory.pin_entity("tracking_code", "ALPHA-991")
+    trace = memory.explain_prompt()
+```
+
+Use `ContextManagerConfig.for_sync_script()` for sensible defaults (L3 storage off). Override any field as needed.
+
+For **non-blocking** compression in sync hosts, see `SawtoothSyncWrapper` in the README integrations section.
+
+### Async API (FastAPI, LangGraph, asyncio agents)
 
 It is highly recommended to use the asynchronous context manager (`async with`) to ensure the background worker thread is properly initialized and gracefully shut down.
 
@@ -223,7 +244,11 @@ async def agent_loop():
 Use `pin_entity()` when you know a value must survive compression regardless of extraction heuristics:
 
 ```python
+# Async
 await cm.pin_entity("tracking_code", "ALPHA-991")
+
+# Sync
+memory.pin_entity("tracking_code", "ALPHA-991")
 ```
 
 Pinned entities are tagged with strategy `pinned` in the JSONL journal and explainability traces.

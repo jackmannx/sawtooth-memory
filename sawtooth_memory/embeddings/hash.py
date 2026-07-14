@@ -33,6 +33,9 @@ class HashEmbeddingProvider(EmbeddingProvider):
         return self._dimension
 
     async def embed(self, texts: Sequence[str]) -> list[list[float]]:
+        return self.embed_sync(texts)
+
+    def embed_sync(self, texts: Sequence[str]) -> list[list[float]]:
         return [_hash_to_vector(text, self._dimension) for text in texts]
 
 

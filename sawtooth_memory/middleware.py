@@ -36,6 +36,11 @@ from .exceptions import TokenLimitExceededError
 from .journal import AsyncCompressionJournal
 from .l3_indexer import SemanticIndexer
 from .monitor import TokenMonitor
+from .prompt_compiler import (
+    compile_prompt,
+    format_l3_retrieval_block,
+    resolve_l3_retrieval_query,
+)
 from .state import (
     ArchivalMemory,
     EntityLedger,
@@ -396,43 +401,22 @@ class ContextManager:
             elif pool_narrative not in local_narrative:
                 self._state.l2_archival.append_narrative(pool_narrative)
 
-    async def _retrieve_l3_chunks(self, query: str) -> str:
+    async def _retrieve_l3_chunks(self, query: str) -> tuple[str, list[dict[str, Any]]]:
         """
         Retrieve chunks from L3 semantic storage and format them into a text block,
         respecting the configured token budget.
         """
-        self._last_l3_retrieval = []
         if not self._l3_indexer:
-            return ""
+            return "", []
 
         results = await self._l3_indexer.search(
             self._config.session_id, query, top_k=self._config.l3_retrieval_top_k
         )
-        if not results:
-            return ""
-
-        block_lines = []
-        current_tokens = 0
-        budget = self._config.l3_retrieval_max_tokens
-
-        for i, res in enumerate(results, 1):
-            line = f"{i}. {res.text}"
-            line_tokens = self._monitor.count_text(line)
-            if current_tokens + line_tokens > budget and current_tokens > 0:
-                break
-
-            block_lines.append(line)
-            current_tokens += line_tokens
-            self._last_l3_retrieval.append({
-                "text": res.text,
-                "similarity": res.similarity,
-                "origin": "L3 Semantic Retrieval",
-            })
-
-        if not block_lines:
-            return ""
-
-        return "\n".join(block_lines)
+        return format_l3_retrieval_block(
+            results,
+            token_budget=self._config.l3_retrieval_max_tokens,
+            count_text=self._monitor.count_text,
+        )
 
     async def build_prompt(self, *, retrieval_query: str | None = None) -> list[dict[str, str]]:
         """
@@ -440,60 +424,24 @@ class ContextManager:
 
         Returns a list of {"role": "...", "content": "..."} dicts, ready
         to pass directly to openai.chat.completions.create() or equivalent.
-
-        Structure of the injected system message:
-            [SYSTEM_L0]
-            <system prompt>
-
-            [ARCHIVE_L2]          (omitted if empty)
-            <compressed history narrative>
-
-            [ARCHIVE_L3]          (omitted if empty or disabled)
-            <semantic retrieval hits>
-
-            [ENTITY_LEDGER_L1_5]  (omitted if empty)
-            <json key-value pairs>
-
-        Followed by raw Working Memory (L1) messages.
         """
         await self._sync_pool_state_from_storage()
-        state = self._state
-        system_parts: list[str] = []
+        l3_block = ""
+        l3_retrieval: list[dict[str, Any]] = []
 
-        system_parts.append(f"[SYSTEM_L0]\n{state.l0_system.content}")
-
-        if state.l2_archival.narrative.strip():
-            system_parts.append(f"[ARCHIVE_L2]\n{state.l2_archival.narrative.strip()}")
-
-        # L3 Semantic Retrieval
-        self._last_l3_retrieval = []
         if self._config.enable_l3_prompt_retrieval and self._l3_indexer:
-            query = retrieval_query
-            if not query:
-                # Scan L1 messages newest-first for the last user message
-                for msg in reversed(state.l1_working.messages):
-                    if msg.role == "user":
-                        query = msg.content
-                        break
-
+            query = resolve_l3_retrieval_query(self._state, retrieval_query)
             if query:
-                l3_block = await self._retrieve_l3_chunks(query)
-                if l3_block:
-                    system_parts.append(f"[ARCHIVE_L3]\n{l3_block}")
+                l3_block, l3_retrieval = await self._retrieve_l3_chunks(query)
 
-        if state.l1_5_entities.entities:
-            system_parts.append(
-                f"[ENTITY_LEDGER_L1_5]\n{state.l1_5_entities.to_json_str()}"
-            )
-
-        messages: list[dict[str, str]] = [
-            {"role": "system", "content": "\n\n".join(system_parts)}
-        ]
-
-        for msg in state.l1_working.messages:
-            messages.append(msg.to_openai_dict())
-
-        return messages
+        result = compile_prompt(
+            self._state,
+            self._config,
+            l3_block=l3_block,
+            l3_retrieval=l3_retrieval,
+        )
+        self._last_l3_retrieval = result.l3_retrieval
+        return result.messages
 
     async def search_semantic_archive(
         self, query: str, top_k: int = 5
