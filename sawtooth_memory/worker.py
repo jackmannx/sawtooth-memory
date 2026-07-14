@@ -18,7 +18,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
-from typing import Any, Optional, Union
+from typing import Any, Literal, Optional, Union
 
 from .compression_core import (
     CompressionCycleInput,
@@ -34,6 +34,7 @@ from .events.types import (
     L2SummaryGeneratedEvent,
     L3VectorIndexedEvent,
 )
+from .fold_unit import remove_fold_lines
 from .l3_indexer import SemanticIndexer
 from .ner import NERPipeline
 from .state import MemoryState, Message
@@ -50,6 +51,7 @@ class CompressionTask:
     messages: list[Message]
     state: MemoryState
     cycle_id: str = ""  # Unique ID for this compression cycle (for event correlation)
+    task_kind: Literal["compress", "consolidate"] = "compress"
 
 
 def _messages_to_text(messages: list[Message]) -> str:
@@ -204,6 +206,37 @@ class CompressionWorker:
         )
 
         async def on_success(outcome) -> None:
+            task.state.dte.background_llm_input_tokens += sum(
+                message.token_count for message in task.messages
+            )
+            if task.task_kind == "consolidate":
+                task.state.l2_archival.narrative = remove_fold_lines(
+                    task.state.l2_archival.narrative
+                )
+                if self._storage_adapter and self._pool_id:
+                    try:
+                        pool_state = await self._storage_adapter.load_pool_state(
+                            self._pool_id
+                        )
+                        if pool_state is not None:
+                            shared_entities, shared_archive = pool_state
+                            shared_archive.narrative = remove_fold_lines(
+                                shared_archive.narrative
+                            )
+                            await self._storage_adapter.save_pool_state(
+                                self._pool_id, shared_entities, shared_archive
+                            )
+                    except Exception as exc:
+                        logger.warning(
+                            "CompressionWorker: failed to compact shared fold "
+                            "records (%s).",
+                            exc,
+                            exc_info=True,
+                        )
+                task.state.dte.narrative_debt_tokens = 0
+                task.state.dte.folds_since_narrative = 0
+                task.state.dte.consolidation_cycles += 1
+                task.state.dte.consolidation_queued = False
             if not self._event_bus:
                 return
             asyncio.create_task(
@@ -253,6 +286,16 @@ class CompressionWorker:
                 )
 
         async def on_failure(outcome) -> None:
+            task.state.dte.background_llm_input_tokens += sum(
+                message.token_count for message in task.messages
+            )
+            if task.task_kind == "consolidate":
+                task.state.l2_archival.narrative = "\n".join(
+                    line
+                    for line in task.state.l2_archival.narrative.splitlines()
+                    if not line.startswith("[COMPRESSION UNAVAILABLE:")
+                ).strip()
+                task.state.dte.consolidation_queued = False
             if not self._event_bus:
                 return
             asyncio.create_task(
@@ -266,14 +309,20 @@ class CompressionWorker:
                 )
             )
 
-        await run_compression_cycle_async(
-            cycle_input,
-            self._compressor,
-            self._engine,
-            index_l3=self._index_l3_semantic,
-            on_success=on_success,
-            on_failure=on_failure,
-        )
+        try:
+            await run_compression_cycle_async(
+                cycle_input,
+                self._compressor,
+                self._engine,
+                index_l3=(
+                    self._index_l3_semantic if task.task_kind == "compress" else None
+                ),
+                on_success=on_success,
+                on_failure=on_failure,
+            )
+        finally:
+            if task.task_kind == "consolidate":
+                task.state.dte.consolidation_queued = False
 
     async def _index_l3_semantic(
         self,

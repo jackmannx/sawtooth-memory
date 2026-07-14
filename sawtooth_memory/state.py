@@ -214,6 +214,20 @@ class SemanticVectorMemory(BaseModel):
     last_indexed_at: Optional[datetime] = None
 
 
+class DTEState(BaseModel):
+    """Persistent accounting for Dual-Target Externalization."""
+
+    narrative_debt_tokens: int = 0
+    folds_since_narrative: int = 0
+    main_prompt_tokens: int = 0
+    background_llm_input_tokens: int = 0
+    observation_tokens_saved: int = 0
+    fold_cycles: int = 0
+    consolidation_cycles: int = 0
+    novelty_skips: int = 0
+    consolidation_queued: bool = False
+
+
 class MemoryState(BaseModel):
     """Root state object. Holds all memory tiers (L0–L3)."""
 
@@ -222,3 +236,4 @@ class MemoryState(BaseModel):
     l1_5_entities: EntityLedger = Field(default_factory=EntityLedger)
     l2_archival: ArchivalMemory = Field(default_factory=ArchivalMemory)
     l3_semantic: SemanticVectorMemory = Field(default_factory=SemanticVectorMemory)
+    dte: DTEState = Field(default_factory=DTEState)

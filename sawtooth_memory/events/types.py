@@ -107,3 +107,15 @@ class L3VectorIndexedEvent(SawtoothEvent):
     source_chars: int = 0
     embedding_backend: str = ""
     embedding_model: str = ""
+
+
+@dataclass
+class DTEFoldCreatedEvent(SawtoothEvent):
+    """A zero-LLM fold externalized an L1 trajectory."""
+
+    event_type: Literal["dte.fold_created"] = "dte.fold_created"
+    messages_folded: int = 0
+    tokens_evicted: int = 0
+    entity_keys: List[str] = field(default_factory=list)
+    l3_chunks_indexed: int = 0
+    recoverable: bool = False

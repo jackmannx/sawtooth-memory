@@ -257,6 +257,7 @@ class TestHardTruncate:
             chunk_size=2,
             fallback_truncate=True,
             enable_deterministic_ner=False,
+            compression_mode="always_llm",
         )
 
         with patch(

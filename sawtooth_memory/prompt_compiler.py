@@ -25,6 +25,7 @@ def compile_prompt(
     *,
     l3_block: str = "",
     l3_retrieval: list[dict[str, Any]] | None = None,
+    include_l2: bool = True,
 ) -> PromptCompileResult:
     """
     Compile all memory tiers into an OpenAI-compatible messages list.
@@ -41,7 +42,7 @@ def compile_prompt(
 
     system_parts.append(f"[SYSTEM_L0]\n{state.l0_system.content}")
 
-    if state.l2_archival.narrative.strip():
+    if include_l2 and state.l2_archival.narrative.strip():
         system_parts.append(f"[ARCHIVE_L2]\n{state.l2_archival.narrative.strip()}")
 
     if l3_block.strip():

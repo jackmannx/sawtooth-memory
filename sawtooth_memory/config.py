@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import os
 from enum import Enum
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field, SecretStr, model_validator
 
@@ -120,6 +120,64 @@ class ContextManagerConfig(BaseModel):
     max_unsummarized_turns: Optional[int] = Field(
         default=None,
         description="Trigger compression if unsummarized L1 messages reach this count.",
+    )
+    compression_mode: Literal["dte", "always_llm"] = Field(
+        default="dte",
+        description=(
+            "Compression control policy. 'dte' externalizes evicted messages "
+            "without an LLM; 'always_llm' preserves eager legacy compression."
+        ),
+    )
+    enable_observation_crush: bool = Field(
+        default=True,
+        description="Deterministically compact large tool observations before L1.",
+    )
+    obs_crush_min_tokens: int = Field(
+        default=800,
+        description="Minimum tool-observation size eligible for local compaction.",
+    )
+    obs_cache_max_entries: int = Field(
+        default=32,
+        description="Maximum reversible raw observations retained in process memory.",
+    )
+    narrative_debt_trigger_tokens: int = Field(
+        default=2000,
+        description="Evicted-token debt that makes an L2 consolidation eligible.",
+    )
+    background_spend_ratio: float = Field(
+        default=0.1,
+        description="Maximum background LLM input tokens as a ratio of prompt tokens.",
+    )
+    enable_novelty_filter: bool = Field(
+        default=True,
+        description="Remove ledger-covered and duplicate text before consolidation.",
+    )
+    novelty_min_residual: float = Field(
+        default=0.15,
+        description="Skip consolidation below this residual-to-source token ratio.",
+    )
+    consolidation_on_idle: bool = Field(
+        default=True,
+        description="Allow prompt assembly to enqueue debt consolidation.",
+    )
+    enable_sync_consolidation: bool = Field(
+        default=False,
+        description=(
+            "Allow SyncContextManager.build_prompt() to run consolidation inline. "
+            "Disabled by default to avoid unexpected caller-thread LLM latency."
+        ),
+    )
+    enable_intent_prompt_planner: bool = Field(
+        default=True,
+        description="Dynamically scope L2 and L3 prompt content from query intent.",
+    )
+    omit_l2_when_ledger_covers: bool = Field(
+        default=True,
+        description="Omit redundant L2 for entity queries covered by L1.5.",
+    )
+    compression_guideline: Optional[str] = Field(
+        default=None,
+        description="Optional ACON-style instruction prepended to consolidation input.",
     )
 
     # NEW: Highly descriptive architectural configuration
@@ -278,6 +336,24 @@ class ContextManagerConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def __validate_dte__(self) -> "ContextManagerConfig":
+        if self.obs_crush_min_tokens < 1:
+            raise ValueError("obs_crush_min_tokens must be positive.")
+        if self.obs_cache_max_entries < 1:
+            raise ValueError("obs_cache_max_entries must be positive.")
+        if self.narrative_debt_trigger_tokens < 1:
+            raise ValueError("narrative_debt_trigger_tokens must be positive.")
+        if not 0.0 <= self.background_spend_ratio <= 1.0:
+            raise ValueError("background_spend_ratio must be between 0.0 and 1.0.")
+        if not 0.0 <= self.novelty_min_residual <= 1.0:
+            raise ValueError("novelty_min_residual must be between 0.0 and 1.0.")
+        if not 0.0 <= self.salience_threshold <= 1.0:
+            raise ValueError("salience_threshold must be between 0.0 and 1.0.")
+        if self.salience_max_entities < 1:
+            raise ValueError("salience_max_entities must be positive.")
+        return self
+
+    @model_validator(mode="after")
     def __validate_l3_semantic_storage__(self) -> "ContextManagerConfig":
         """Ensure L3 is only enabled with a compatible semantic storage backend."""
         if not self.enable_l3_semantic_storage:
@@ -322,11 +398,5 @@ class ContextManagerConfig(BaseModel):
 
         if self.l3_retrieval_max_tokens < 1:
             raise ValueError("l3_retrieval_max_tokens must be positive.")
-
-        if not 0.0 <= self.salience_threshold <= 1.0:
-            raise ValueError("salience_threshold must be between 0.0 and 1.0.")
-
-        if self.salience_max_entities < 1:
-            raise ValueError("salience_max_entities must be positive.")
 
         return self

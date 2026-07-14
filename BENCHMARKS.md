@@ -28,6 +28,9 @@ We track metrics separately to avoid conflating main-thread and background costs
 | **Background drain cost** | One-time cost to flush the compression worker at session end (`cm.stop()`) |
 | **Final prompt token footprint** | Size of the compiled payload sent to the primary LLM |
 | **Needle recall (%)** | Retention of injected facts across L1, L1.5 ledger, and L2 archive |
+| **Observation tokens saved** | Raw tool tokens removed before they enter L1 |
+| **Background spend ratio** | Compressor input tokens divided by compiled primary-prompt tokens |
+| **Fold / consolidation cycles** | Zero-LLM externalizations versus paid narrative calls |
 
 ### Methodology
 
@@ -36,6 +39,11 @@ We track metrics separately to avoid conflating main-thread and background costs
 **Sawtooth** measures only main-thread time during active conversation. Compression runs asynchronously in a background worker. A separate `drain_ms` metric captures the one-time flush at session end.
 
 This replaces an earlier approach that compared total session wall time, which unfairly penalized Sawtooth by including background worker drain in the same bucket as per-turn blocking.
+
+For DTE runs, report `get_stats()["dte"]` alongside latency and recall. Compare
+the default `compression_mode="dte"` against `"always_llm"` using the same
+trajectory. A valid cost result must include both primary-prompt tokens and
+background-compressor input tokens; reporting only one hides cost shifting.
 
 ---
 

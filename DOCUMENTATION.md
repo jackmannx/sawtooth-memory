@@ -105,7 +105,36 @@ The primary interface for your application. It manages the lifecycle of the memo
 
 ### `CompressionWorker`
 
-A dedicated background asynchronous task. It monitors the total token count of the L1 Working Memory. When the token count exceeds the configured `soft_limit_tokens`, it slices off the oldest `chunk_size` messages and sends them to the designated compression LLM.
+A dedicated background asynchronous task for legacy eager compression and DTE
+pull consolidation. `ContextManager` monitors L1; in default DTE mode it folds
+the oldest `chunk_size` messages locally, while `always_llm` sends that chunk to
+the designated compression model.
+
+### Dual-Target Externalization (DTE)
+
+DTE is the default compression policy. It optimizes the two token-cost sources
+separately:
+
+1. **Observation Crush** deterministically compacts large `tool` messages before
+   they enter L1. JSON arrays are sampled with their count and logs retain errors
+   plus nearby context. The original remains available through
+   `retrieve_observation(cache_id)` in a bounded in-process cache.
+2. **Structured Folding** handles a soft-limit eviction without an LLM call.
+   Entity Guard writes exact values to L1.5, optional L3 stores the raw trajectory,
+   and L2 receives a compact `[FOLD ...]` outcome record.
+3. **Intent-aware prompt assembly** scopes L3 retrieval and can omit redundant L2
+   narrative when an entity lookup is already covered by L1.5.
+4. **Pull consolidation** converts accumulated folds into narrative only when
+   narrative debt or query intent warrants it and the configured background spend
+   ratio permits it. A novelty filter removes ledger-covered text before the call.
+
+Set `compression_mode="always_llm"` to retain the legacy behavior where every
+soft-limit cycle immediately calls the compression model.
+
+This design follows current agent-context research by treating observations and
+history as separate compression targets, preferring recoverable externalization
+over irreversible rewriting, and separating the compression mechanism from its
+control policy.
 
 ### `MemoryState`
 
@@ -140,6 +169,7 @@ from pydantic import SecretStr
 
 # Local Execution (Ollama)
 local_config = ContextManagerConfig(
+    compression_mode="dte",    # Zero-LLM soft-limit folding (default)
     soft_limit_tokens=1000,    # Trigger compression at 1k tokens
     hard_limit_tokens=2500,    # Failsafe truncation limit
     chunk_size=4,              # Compress 4 messages at a time
@@ -172,6 +202,20 @@ v2_config = ContextManagerConfig(background_model="gpt-4o-mini")
 * `soft_limit_tokens`: The threshold that awakens the background worker.
 * `hard_limit_tokens`: A strict ceiling. If the worker cannot compress fast enough (e.g., due to API rate limits), the system will brutally truncate old messages to prevent your main agent from crashing due to context window overflow.
 * `chunk_size`: The number of messages shifted from L1 to L2 per compression cycle.
+* `compression_mode`: `"dte"` (default) or `"always_llm"` (legacy eager compression).
+* `enable_observation_crush` / `obs_crush_min_tokens`: Enable local compaction of
+  large tool observations and set its threshold (default 800 tokens).
+* `narrative_debt_trigger_tokens`: Evicted-token debt required before background
+  narrative consolidation is eligible (default 2000).
+* `background_spend_ratio`: Maximum cumulative background-compressor input tokens
+  divided by compiled main-prompt tokens (default 0.1).
+* `enable_sync_consolidation`: Permit inline consolidation during
+  `SyncContextManager.build_prompt()` (default `False` to avoid unexpected
+  caller-thread LLM latency). `SawtoothSyncWrapper` uses the async worker instead.
+* `enable_novelty_filter` / `novelty_min_residual`: Strip known ledger values and
+  duplicate lines; skip calls whose residual ratio is too small.
+* `enable_intent_prompt_planner`: Dynamically budget L3 and omit redundant L2.
+* `compression_guideline`: Optional ACON-style consolidator instruction.
 
 **Entity Guard Parameters:**
 

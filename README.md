@@ -13,7 +13,12 @@ Standard LLM memory systems (like LangChain's `ConversationSummaryMemory`) proce
 
 ## The Solution
 
-**Sawtooth Memory** eliminates this latency and data loss. It immediately stores the user's message and returns control to the application in milliseconds, offloading the heavy summarization to an asynchronous background worker. To prevent hallucinations, it extracts critical facts into an immutable ledger before summarizing.
+**Sawtooth Memory** eliminates this latency and data loss. It immediately stores
+the user's message and returns control in milliseconds. By default, Dual-Target
+Externalization (DTE) compacts large tool observations locally and folds old
+history into an exact entity ledger plus recoverable semantic archive without an
+LLM call. Optional background narration runs only when query intent, accumulated
+debt, and a spend-ratio budget justify it.
 
 ---
 
@@ -73,6 +78,10 @@ When your agent is ready to respond, Sawtooth stitches together an optimized con
 
 - **Zero-Latency Ingestion:** Messages are appended to L1 instantly. A local `tiktoken` monitor checks thresholds without making API calls.
 - **Dual LLM Compression Backends:** Run compression locally via `OllamaCompressor` or in the cloud using `CloudCompressor` (with modular adapters for OpenAI, Anthropic, and Gemini).
+- **Dual-Target Externalization:** Zero-LLM soft-limit folding, reversible local
+  tool-output compaction, intent-scoped retrieval, novelty filtering, and a hard
+  ratio cap on background compressor tokens. Use
+  `compression_mode="always_llm"` for legacy eager summarization.
 - **Deterministic NER Engine:** A zero-latency local regex pipeline extracts UUIDs, file paths, and URIs _before_ the LLM sees the text, securely populating the Entity Ledger (L1.5) and overriding potential LLM hallucinations.
 - **Salience Entity Guard:** A local heuristic extractor catches unstructured identifiers (ticket IDs, tracking codes, reference numbers) that regex misses. Protection manifests, post-merge verification, and ingest-time scanning keep critical values out of compression loss.
 - **Turn-Based Batching & Debouncing:** Prevent background queue flooding using `max_unsummarized_turns` to trigger compression safely by turn count, alongside token limits.
