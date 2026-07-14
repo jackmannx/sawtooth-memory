@@ -2,8 +2,10 @@
 semantic.py — L3 semantic vector storage contract.
 
 Optional mixin for storage adapters that persist pgvector-backed
-archival chunks. Retrieval is exposed via adapter methods but is
-not wired into ``build_prompt()`` until a future release.
+archival chunks. When ``enable_l3_prompt_retrieval`` is True (default),
+``ContextManager.build_prompt()`` injects top-k matches into the system
+block as ``[ARCHIVE_L3]``. Call ``search_semantic_archive()`` for
+explicit queries outside prompt compilation.
 """
 
 from __future__ import annotations

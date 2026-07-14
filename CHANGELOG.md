@@ -7,11 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Added
+- Expanded package-root public API: `SawtoothSyncWrapper`, `CloudConfig`, `Provider`, storage adapters, event bus symbols, and embedding helpers.
+- Formal sync-environment guidance (`SyncContextManager` vs `SawtoothSyncWrapper` vs `ContextManager`) with method parity on the sync portal (`pin_entity`, `retrieve_observation`, `.state`).
+- Detailed API Reference and examples index in `DOCUMENTATION.md`.
+- Deeper examples: sync non-blocking wrapper, cloud compressor, multi-agent pool, Postgres+L3.
 - Salience Entity Guard: local heuristic extractor for unstructured identifiers (ticket IDs, tracking codes, reference numbers).
 - Multi-match regex extraction (e.g. `uuid`, `uuid_2`) for multiple occurrences per pattern.
 - Protection manifest injection into compression prompts and post-merge entity verifier.
 - Ingest-time entity scanning on `add_message()` and explicit `pin_entity()` API.
 - Strategy provenance telemetry: `salience_heuristic` and `pinned` extraction sources.
+- Dual-Target Externalization (DTE) default compression mode with observation crush and fold units.
+- Sync-native `SyncContextManager` with inline compression for scripts and WSGI hosts.
+
+### Changed
+- L3 module docs now reflect `build_prompt()` retrieval injection.
+- Event bus documentation corrected to use string event types + `get_event_bus()`.
+- `SECURITY.md` support table covers current 0.2.x releases.
 
 ## [0.2.2] - 2026-07-11
 ### Added
