@@ -4,18 +4,18 @@ We take the security of `sawtooth-memory` seriously. If you find a flaw, vulnera
 
 ## Supported Versions
 
-We actively support, monitor, and provide security patches for the latest stable release of the project.
+We actively support, monitor, and provide security patches for the latest published release line on PyPI.
 
 | Version | Supported          |
 | ------- | ------------------ |
-| >=1.0.0 | :white_check_mark: |
-| < 1.0.0 | :x:                |
+| 0.2.x   | :white_check_mark: |
+| < 0.2.0 | :x:                |
 
 ## Reporting a Vulnerability
 
 If you discover a security vulnerability, please **do NOT open a public GitHub Issue**. Publicly exposing a live vulnerability puts systems running this package at risk.
 
-Instead, please report your findings privately by sending a detailed email to **i.am.the.godddddddd@gmail.com**.
+Instead, please report your findings privately by sending a detailed email to **dev@jackmann.xyz**.
 
 ### What to Include in Your Report:
 

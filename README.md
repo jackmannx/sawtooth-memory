@@ -157,7 +157,7 @@ with SyncContextManager("You are a helpful assistant.", config=config) as memory
     print(prompt)
 ```
 
-See [`examples/simple_sync_script.py`](examples/simple_sync_script.py) for a full runnable example.
+See [`examples/simple_sync_script.py`](examples/simple_sync_script.py) for a full runnable example. Additional deep-dives live under [`examples/`](examples/) (sync portal, cloud backend, multi-agent pool, Postgres+L3).
 
 | API | When to use | Compression behavior |
 | --- | --- | --- |
@@ -206,7 +206,7 @@ if __name__ == "__main__":
 For explicit cloud configuration without environment variables:
 
 ```python
-from sawtooth_memory.config import CloudConfig, Provider
+from sawtooth_memory import CloudConfig, ContextManagerConfig, Provider
 
 config = ContextManagerConfig(
     cloud=CloudConfig(
@@ -296,9 +296,19 @@ lc_messages = history.messages
 
 ### 4. Synchronous APIs
 
-#### SyncContextManager (recommended)
+Sawtooth formally supports three host patterns. Prefer the simplest that meets your latency budget:
 
-For Flask, Django, CLI tools, and linear scripts, use the sync-native API. No asyncio, background worker, or AnyIO portal is required:
+| API | Host | Compression |
+| --- | --- | --- |
+| `SyncContextManager` | Scripts, Flask, Django, notebooks | Blocking inline |
+| `SawtoothSyncWrapper` | Sync hosts that need async-worker semantics | Non-blocking (AnyIO portal) |
+| `ContextManager` | FastAPI, LangGraph, asyncio | Non-blocking worker |
+
+Full method parity on sync APIs: `add_message`, `pin_entity`, `retrieve_observation`, `build_prompt`, `explain_prompt`, L3 helpers, `.state`, `get_stats`, `health_check`.
+
+See [DOCUMENTATION.md §5](DOCUMENTATION.md#5-api--usage-guide) and [§10 API Reference](DOCUMENTATION.md#10-api-reference).
+
+#### SyncContextManager (recommended for simple sync apps)
 
 ```python
 from sawtooth_memory import SyncContextManager, ContextManagerConfig
@@ -308,16 +318,19 @@ def my_flask_route():
 
     with SyncContextManager("You are a helpful assistant.", config=config) as memory:
         memory.add_message("user", "Hello world!")
+        memory.pin_entity("session_note", "hello")
         prompt = memory.build_prompt()
         return prompt
 ```
 
-#### SawtoothSyncWrapper (advanced: non-blocking in sync hosts)
+#### SawtoothSyncWrapper (non-blocking in sync hosts)
 
-If you need **non-blocking** compression inside a synchronous application (same behavior as `ContextManager`), use `SawtoothSyncWrapper`. It runs the full async stack on an AnyIO daemon thread:
+Use when ingest must stay fast while compression continues in the background:
 
 ```python
-from sawtooth_memory.sync_wrapper import SawtoothSyncWrapper
+from sawtooth_memory import SawtoothSyncWrapper, ContextManagerConfig
+
+config = ContextManagerConfig(soft_limit_tokens=1500)
 
 def my_flask_route():
     with SawtoothSyncWrapper("You are a helpful assistant.", config=config) as memory:
@@ -371,8 +384,7 @@ The `RedisStorageAdapter` serializes your state trees to high-speed JSON structu
 
 ```python
 import asyncio
-from sawtooth_memory import ContextManager, ContextManagerConfig
-from sawtooth_memory.storage.redis_adapter import RedisStorageAdapter
+from sawtooth_memory import ContextManager, ContextManagerConfig, RedisStorageAdapter
 
 async def main():
     # Initialize the high-speed distributed storage backend
@@ -408,8 +420,7 @@ Requirements:
 
 ```python
 import asyncio
-from sawtooth_memory import ContextManager, ContextManagerConfig
-from sawtooth_memory.storage.postgres_adapter import PostgresStorageAdapter
+from sawtooth_memory import ContextManager, ContextManagerConfig, PostgresStorageAdapter
 
 async def main():
     postgres = PostgresStorageAdapter(
@@ -455,20 +466,27 @@ if __name__ == "__main__":
 - [x] EventBus Subsystem & JSONL Auditing Journal
 - [x] Explainability Traces & Performance Benchmarking Harness
 - [x] Deterministic NER Engine
-- [x] Salience Entity Guard (heuristic extraction, protection manifest, verifier)
+- [x] Salience Entity Guard (unstructured ID protection)
 - [x] LangGraph ToolMessage Sanitization
-- [x] Turn-Based Batching & Debouncing
-- [x] Modern LangChain (LCEL) History Adapter
-- [x] AnyIO Synchronous Blocking Portal (Flask/Django Support)
+- [x] Max Unsummarized Turns (Turn-based Batching)
+- [x] Modern LangChain `BaseChatMessageHistory` Adapter
+- [x] Synchronous AnyIO Blocking Portal Wrapper
 
 - **Phase 3: Advanced Architectures**
 - [x] Redis Distributed Storage Adapter (High-Speed Session Pooling)
 - [x] Postgres Storage Adapter (Persistent Relational Cache with pgvector)
 - [x] Multi-Agent Memory Pooling (Shared contextual state)
-- [x] Semantic Vector L3 Archival Memory (Storage layer)
+- [x] L3 Semantic Vector Storage Layer
 
 - **Phase 4: RAG Integration**
 - [x] Semantic Vector L3 Archival Memory (Retrieval injected into `build_prompt()`)
+
+- **Phase 5: Public API, Sync DX & Docs**
+- [x] Dual-Target Externalization (DTE) default compression path
+- [x] Sync-native `SyncContextManager` + formal sync host guidance
+- [x] Expanded package-root public exports (storage, events, embeddings, sync wrapper)
+- [x] Detailed API Reference + deeper examples (pool, Postgres/L3, cloud, sync portal)
+- [ ] Release polish: CHANGELOG/tag alignment toward next PyPI cut
 
 ---
 

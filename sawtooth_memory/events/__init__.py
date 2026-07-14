@@ -9,6 +9,7 @@ from .types import (
     HardLimitReachedEvent,
     L1EvictionEvent,
     L2SummaryGeneratedEvent,
+    L3VectorIndexedEvent,
     SawtoothEvent,
     SoftLimitReachedEvent,
 )
@@ -27,6 +28,7 @@ __all__ = [
     "HardLimitReachedEvent",
     "L1EvictionEvent",
     "L2SummaryGeneratedEvent",
+    "L3VectorIndexedEvent",
     "SawtoothEvent",
     "SoftLimitReachedEvent",
 ]

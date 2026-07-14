@@ -4,8 +4,10 @@ l3_indexer.py — L3 semantic vector archival indexing service.
 Chunks evicted L1 text, batch-embeds via an :class:`EmbeddingProvider`,
 and persists vectors through a :class:`SemanticStorageAdapter`.
 
-Retrieval is exposed via :meth:`SemanticIndexer.search` but is **not**
-wired into ``ContextManager.build_prompt()`` in this release.
+``SemanticIndexer.search`` powers both explicit
+``ContextManager.search_semantic_archive()`` calls and automatic
+``[ARCHIVE_L3]`` injection inside ``build_prompt()`` when
+``enable_l3_prompt_retrieval`` is enabled.
 """
 
 from __future__ import annotations

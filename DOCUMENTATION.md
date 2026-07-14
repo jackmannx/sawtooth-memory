@@ -16,6 +16,8 @@ This documentation provides a deep dive into the architecture, configuration, an
 7. [LangGraph Integration](#7-langgraph-integration)
 8. [Persistence & Journaling](#8-persistence--journaling)
 9. [Distributed Storage & L3 Semantic Archival](#9-distributed-storage--l3-semantic-archival)
+10. [API Reference](#10-api-reference)
+11. [Examples](#11-examples)
 
 ---
 
@@ -101,7 +103,14 @@ When `build_prompt()` is called, Sawtooth constructs the prompt using a strict h
 
 ### `ContextManager`
 
-The primary interface for your application. It manages the lifecycle of the memory state, handles the prompt building logic, and safely spins up/shuts down the background worker.
+The primary async interface for your application. It manages the lifecycle of the memory state, handles the prompt building logic, and safely spins up/shuts down the background worker.
+
+### Sync managers
+
+- **`SyncContextManager`** — sync-native path for scripts and WSGI. Same L0–L2 (optional L3) model and Entity Guard, with **inline** compression on the calling thread. No EventBus or background worker.
+- **`SawtoothSyncWrapper`** — sync call sites that still need the async worker. Bridges through an AnyIO BlockingPortal so ingest stays non-blocking.
+
+See [§5](#5-api--usage-guide) for the decision table and [§10](#10-api-reference) for method signatures.
 
 ### `CompressionWorker`
 
@@ -242,9 +251,42 @@ v2_config = ContextManagerConfig(background_model="gpt-4o-mini")
 
 ## 5. API & Usage Guide
 
-### Sync-native API (scripts and WSGI)
+Sawtooth ships three first-class managers. Import them from the package root:
 
-For linear scripts, Flask, Django, and CLI tools, use `SyncContextManager`. It provides the full L0–L2 tier model and entity guard without asyncio or a background worker. Compression runs **inline** on the calling thread when limits are reached.
+```python
+from sawtooth_memory import (
+    ContextManager,          # async, non-blocking worker
+    SyncContextManager,      # sync, inline blocking compression
+    SawtoothSyncWrapper,     # sync call sites + async worker via AnyIO portal
+)
+```
+
+### Choosing a manager (sync environments formalized)
+
+| Host environment | Recommended API | Compression | Events / journal | Notes |
+|---|---|---|---|---|
+| Scripts, notebooks, simple CLIs | `SyncContextManager` | **Blocking** inline | No | Default via `for_sync_script()`; L3 off unless you enable it |
+| Flask / Django / sync WSGI that can tolerate brief stalls | `SyncContextManager` | **Blocking** inline | No | Set `enable_sync_consolidation=True` only if you want LLM consolidation during `build_prompt()` |
+| Sync host that must keep ingest non-blocking | `SawtoothSyncWrapper` | **Non-blocking** background worker | Yes (optional) | Same semantics as async `ContextManager` |
+| FastAPI, LangGraph, asyncio agents | `ContextManager` | **Non-blocking** worker | Yes (optional) | Prefer `async with` lifecycle |
+
+**Rule of thumb:** start with `SyncContextManager`. Graduate to `SawtoothSyncWrapper` only when inline compression latency is unacceptable. Use async `ContextManager` whenever the host already has an event loop.
+
+Shared method surface (sync managers omit `async` / `await`):
+
+| Method | Purpose |
+|---|---|
+| `add_message(role, content)` | Append to L1; may trigger compression |
+| `pin_entity(key, value)` | Force exact L1.5 retention (`pinned` strategy) |
+| `retrieve_observation(cache_id)` | Recover raw tool text from Observation Crush cache |
+| `build_prompt(*, retrieval_query=None)` | Compile L0 + L2 + L1.5 + L1 (+ optional L3) |
+| `explain_prompt()` | Deterministic audit trail |
+| `search_semantic_archive(query, top_k=5)` | Explicit L3 search |
+| `l3_chunk_count()` | Indexed L3 chunk count |
+| `get_stats()` / `health_check()` | Runtime diagnostics |
+| `.state` | Live `MemoryState` (prefer read-only) |
+
+### Sync-native API (scripts and WSGI)
 
 ```python
 from sawtooth_memory import SyncContextManager, ContextManagerConfig
@@ -259,39 +301,50 @@ with SyncContextManager(system_prompt="You are an expert.", config=config) as me
     trace = memory.explain_prompt()
 ```
 
-Use `ContextManagerConfig.for_sync_script()` for sensible defaults (L3 storage off). Override any field as needed.
+`ContextManagerConfig.for_sync_script()` turns L3 off by default. Override any field as needed.
 
-For **non-blocking** compression in sync hosts, see `SawtoothSyncWrapper` in the README integrations section.
+### Sync non-blocking portal (`SawtoothSyncWrapper`)
+
+```python
+from sawtooth_memory import SawtoothSyncWrapper, ContextManagerConfig, get_event_bus
+
+config = ContextManagerConfig(soft_limit_tokens=1500)
+
+async def on_cycle(event):
+    print(event.messages_compressed, event.l1_tokens_evicted)
+
+get_event_bus().subscribe("compression.cycle_complete", on_cycle)
+
+with SawtoothSyncWrapper("You are an expert.", config=config) as memory:
+    memory.add_message("user", "Escalate INC-4421")
+    memory.pin_entity("ticket_id", "INC-4421")
+    payload = memory.build_prompt()
+```
 
 ### Async API (FastAPI, LangGraph, asyncio agents)
 
-It is highly recommended to use the asynchronous context manager (`async with`) to ensure the background worker thread is properly initialized and gracefully shut down.
+Prefer `async with` so the background worker starts and stops cleanly.
 
 ```python
 import asyncio
 from sawtooth_memory import ContextManager, ContextManagerConfig
 
 async def agent_loop():
-    config = ContextManagerConfig(...)
+    config = ContextManagerConfig(soft_limit_tokens=1500)
 
     async with ContextManager(system_prompt="You are an expert.", config=config) as cm:
-        # Loop runs instantly
         await cm.add_message("user", "Hello.")
         await cm.add_message("assistant", "Hi there.")
-
         payload = await cm.build_prompt()
-
 ```
 
 ### Pinning Critical Entities
-
-Use `pin_entity()` when you know a value must survive compression regardless of extraction heuristics:
 
 ```python
 # Async
 await cm.pin_entity("tracking_code", "ALPHA-991")
 
-# Sync
+# Sync (SyncContextManager or SawtoothSyncWrapper)
 memory.pin_entity("tracking_code", "ALPHA-991")
 ```
 
@@ -314,17 +367,16 @@ config = ContextManagerConfig(
 
 ### Manual Lifecycle Management
 
-If you cannot use `async with` (e.g., inside certain web framework state objects), you must manually start and stop the manager:
+If you cannot use `async with` (e.g., inside certain web framework state objects), start and stop manually:
 
 ```python
 cm = ContextManager(system_prompt="...", config=config)
 await cm.start()
-
 # ... app logic ...
-
-await cm.stop() # CRITICAL: Flushes pending compression tasks and saves journal
-
+await cm.stop()  # Flushes pending compression and saves journal
 ```
+
+For sync portal hosts, always use `with SawtoothSyncWrapper(...)` — it owns the BlockingPortal lifecycle.
 
 ---
 
@@ -357,18 +409,32 @@ print(trace)
 
 ### The Event Bus
 
-You can subscribe to internal system events to log compression metrics or trigger webhooks.
+Subscribe via the package-level bus (there is no public `cm.event_bus` property). Handlers must be async callables; event types are string literals matching each event dataclass.
 
 ```python
-from sawtooth_memory.events import EventType
+from sawtooth_memory import get_event_bus, CompressionCycleCompleteEvent
 
-def on_compression(event):
-    print(f"Compressed {event.data['messages_compressed']} messages.")
-    print(f"Tokens saved: {event.data['tokens_saved']}")
+async def on_compression(event: CompressionCycleCompleteEvent) -> None:
+    print(f"Compressed {event.messages_compressed} messages.")
+    print(f"L1 tokens evicted: {event.l1_tokens_evicted}")
 
-cm.event_bus.subscribe(EventType.COMPRESSION_COMPLETED, on_compression)
-
+get_event_bus().subscribe("compression.cycle_complete", on_compression)
 ```
+
+Common event type strings:
+
+| String | Dataclass |
+|---|---|
+| `l1.eviction` | `L1EvictionEvent` |
+| `l1_5.entity_anchored` | `EntityAnchoredEvent` |
+| `l2.summary_generated` | `L2SummaryGeneratedEvent` |
+| `compression.cycle_started` | `CompressionCycleStartEvent` |
+| `compression.cycle_complete` | `CompressionCycleCompleteEvent` |
+| `compression.cycle_failed` | `CompressionCycleFailedEvent` |
+| `monitor.soft_limit_reached` | `SoftLimitReachedEvent` |
+| `monitor.hard_limit_reached` | `HardLimitReachedEvent` |
+| `dte.fold_created` | `DTEFoldCreatedEvent` |
+| `l3.vector_indexed` | `L3VectorIndexedEvent` |
 
 ---
 
@@ -453,7 +519,7 @@ trace = cm.explain_prompt()  # includes l3_semantic metadata
 Enable L3 indexing:
 
 ```python
-from sawtooth_memory.storage.postgres_adapter import PostgresStorageAdapter
+from sawtooth_memory import ContextManager, ContextManagerConfig, PostgresStorageAdapter
 
 postgres = PostgresStorageAdapter(
     dsn="postgresql://user:pass@localhost/sawtooth",
@@ -470,5 +536,162 @@ config = ContextManagerConfig(
 ```
 
 Telemetry: subscribe to `l3.vector_indexed` events on the event bus for chunk counts and embedding backend metadata.
+
+---
+
+## 10. API Reference
+
+All symbols below are imported from `sawtooth_memory` unless noted. Optional framework bridges live under `sawtooth_memory.integrations.*` and require extras.
+
+### Package exports
+
+**Managers:** `ContextManager`, `SyncContextManager`, `SawtoothSyncWrapper`
+
+**Config:** `ContextManagerConfig`, `OllamaConfig`, `CloudConfig`, `Provider`
+
+**State / results:** `MemoryState`, `SemanticChunkResult`
+
+**Storage:** `BaseStorageAdapter`, `RedisStorageAdapter`, `PostgresStorageAdapter`
+
+**Events:** `EventBus`, `get_event_bus`, `reset_event_bus`, `make_journal_handler`, `SawtoothEvent`, plus typed event dataclasses listed in §6
+
+**Embeddings:** `EmbeddingProvider`, `HashEmbeddingProvider`, `OpenAIEmbeddingProvider`, `create_embedding_provider`
+
+**Exceptions:** `SawtoothError`, `CompressionError`, `OllamaConnectionError`, `MalformedOutputError`, `TokenLimitExceededError`
+
+### `ContextManager` (async)
+
+```text
+ContextManager(
+    system_prompt: str,
+    config: ContextManagerConfig | None = None,
+    *,
+    enable_events: bool = True,
+    journal_path: Path | None = None,
+)
+```
+
+| Method | Signature | Description |
+|---|---|---|
+| `start` / `stop` | `async () -> None` | Lifecycle without context manager |
+| `add_message` | `async (role, content) -> None` | Append L1; soft limit enqueues worker |
+| `pin_entity` | `async (key, value) -> None` | Pin L1.5 entity |
+| `retrieve_observation` | `(cache_id) -> str \| None` | Observation Crush lookup |
+| `build_prompt` | `async (*, retrieval_query=None) -> list[dict]` | Compile OpenAI-style messages |
+| `search_semantic_archive` | `async (query, top_k=5) -> list[SemanticChunkResult]` | Explicit L3 search |
+| `l3_chunk_count` | `async () -> int` | Indexed chunk count |
+| `explain_prompt` | `() -> dict` | Explainability trace |
+| `get_stats` | `() -> dict` | Tokens, DTE, worker snapshot |
+| `health_check` | `async () -> dict` | Readiness report |
+| `state` | property `MemoryState` | Live state tree |
+
+### `SyncContextManager` (sync, inline)
+
+```text
+SyncContextManager(
+    system_prompt: str,
+    config: ContextManagerConfig | None = None,  # defaults to for_sync_script()
+)
+```
+
+Same method names as above without `async`. Compression runs on the calling thread. No EventBus and no background worker. Optional L3 methods bridge storage via a one-shot event loop helper.
+
+Sync-only config flags of interest:
+
+- `enable_sync_consolidation` — allow LLM consolidation during `build_prompt()`
+- `ContextManagerConfig.for_sync_script(...)` — L3 disabled defaults for scripts
+
+### `SawtoothSyncWrapper` (sync façade, non-blocking)
+
+```text
+SawtoothSyncWrapper(
+    system_prompt: str,
+    config: ContextManagerConfig | None = None,
+    *,
+    enable_events: bool = True,
+    journal_path: Path | None = None,
+)
+```
+
+Proxies the full async `ContextManager` through an AnyIO `BlockingPortal`. Method surface matches `SyncContextManager` (`add_message`, `pin_entity`, `retrieve_observation`, `build_prompt`, `explain_prompt`, L3 helpers, `state`, `get_stats`, `health_check`).
+
+### `ContextManagerConfig` (selected fields)
+
+| Field | Default | Notes |
+|---|---|---|
+| `soft_limit_tokens` / `hard_limit_tokens` | `1000` / `2500` | Compression triggers |
+| `chunk_size` | `4` | Messages folded/summarized per cycle |
+| `compression_mode` | `"dte"` | `"dte"` or `"always_llm"` |
+| `background_model` | `None` | Auto-route Ollama vs cloud by model name |
+| `ollama` / `cloud` | — | Explicit backend configs |
+| `enable_sync_consolidation` | `False` | SyncContextManager only |
+| `storage_adapter` / `session_id` / `pool_id` | — | Distributed persistence + multi-agent sharing |
+| `enable_l3_semantic_storage` | `False` | Requires Postgres + semantic mixin |
+| `enable_l3_prompt_retrieval` | `True` | Inject `[ARCHIVE_L3]` into prompts |
+| `embedding_backend` | `"hash"` | `"hash"` or `"openai"` |
+| Entity Guard flags | on/off | See §3 / §4 |
+
+### Storage adapters
+
+```python
+from sawtooth_memory import RedisStorageAdapter, PostgresStorageAdapter
+
+RedisStorageAdapter(
+    redis_url="redis://localhost:6379/0",
+    key_prefix="sawtooth:session:",
+    ttl_seconds=86400,
+)
+
+PostgresStorageAdapter(
+    dsn="postgresql://user:pass@localhost/sawtooth",
+    embedding_dimension=1536,
+    min_pool_size=2,
+    max_pool_size=10,
+)
+```
+
+Both implement `load_state` / `save_state` / `delete_state` / `load_pool_state` / `save_pool_state`. Postgres additionally implements L3 vector upsert/search. Call `await adapter.close()` on shutdown.
+
+### Integrations (extras)
+
+```python
+# pip install "sawtooth-memory[langgraph]"
+from sawtooth_memory.integrations.langgraph import (
+    SawtoothLangGraphAdapter,
+    build_sawtooth_graph,
+    AgentState,
+)
+
+# pip install "sawtooth-memory[langchain]"
+from sawtooth_memory.integrations.langchain_adapter import SawtoothChatMessageHistory
+```
+
+`SawtoothLangGraphAdapter.sync_state(messages)` ingests LangGraph messages; `get_compiled_prompt()` returns sanitized LangChain messages (orphan `ToolMessage`s removed).
+
+`SawtoothChatMessageHistory` wraps `SawtoothSyncWrapper` for LangChain `BaseChatMessageHistory` compatibility (`init_portal` / `close_portal` required around the session).
+
+### Embeddings
+
+```python
+from sawtooth_memory import create_embedding_provider
+
+provider = create_embedding_provider("hash", dimension=384)
+# or: create_embedding_provider("openai", model="text-embedding-3-small", api_key=...)
+vectors = await provider.embed(["chunk one", "chunk two"])
+```
+
+---
+
+## 11. Examples
+
+| Script | Demonstrates |
+|---|---|
+| [`examples/simple_sync_script.py`](examples/simple_sync_script.py) | `SyncContextManager` linear script |
+| [`examples/sync_nonblocking_wrapper.py`](examples/sync_nonblocking_wrapper.py) | `SawtoothSyncWrapper` + event bus |
+| [`examples/basic_agent.py`](examples/basic_agent.py) | Async `ContextManager` + Entity Guard |
+| [`examples/cloud_compressor.py`](examples/cloud_compressor.py) | Explicit `CloudConfig` / `Provider` |
+| [`examples/multi_agent_pool.py`](examples/multi_agent_pool.py) | Shared `pool_id` across agents |
+| [`examples/postgres_l3_agent.py`](examples/postgres_l3_agent.py) | Postgres + L3 retrieval (`SAWTOOTH_PG_DSN`) |
+| [`examples/langgraph_integration.py`](examples/langgraph_integration.py) | LangGraph adapter + ToolMessage-safe prompt |
 
 ---

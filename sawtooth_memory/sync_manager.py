@@ -63,8 +63,18 @@ class SyncContextManager:
     """
     Synchronous memory manager with full L0–L2 tier support and optional L3.
 
-    Compression runs inline when token limits are reached (blocking). For
-    non-blocking compression in sync hosts, use SawtoothSyncWrapper instead.
+    Designed for scripts, notebooks, Flask/Django views, and other sync hosts
+    that do not run an asyncio event loop. Compression runs **inline** on the
+    calling thread when soft/hard limits are reached (blocking).
+
+    Choosing a sync API:
+
+    - ``SyncContextManager`` — simplest; no background threads; blocking folds.
+    - ``SawtoothSyncWrapper`` — same sync call sites, but drives the async
+      ``ContextManager`` worker via an AnyIO portal (non-blocking ingest).
+
+    Prefer ``ContextManagerConfig.for_sync_script()`` defaults (L3 off) unless
+    you explicitly wire a semantic storage adapter.
     """
 
     def __init__(

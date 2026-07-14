@@ -1,14 +1,13 @@
 import asyncio
 from typing import Annotated
+
+from langchain_core.messages import AIMessage, HumanMessage
+from langgraph.graph import END, START, StateGraph
+from langgraph.graph.message import add_messages
 from typing_extensions import TypedDict
 
-from langgraph.graph import StateGraph, START, END
-from langgraph.graph.message import add_messages
-from langchain_core.messages import HumanMessage, AIMessage
-
-from sawtooth_memory import ContextManager
-from sawtooth_memory.config import ContextManagerConfig, OllamaConfig
-from sawtooth_memory.integrations.langgraph.adapter import SawtoothLangGraphAdapter
+from sawtooth_memory import ContextManager, ContextManagerConfig, OllamaConfig
+from sawtooth_memory.integrations.langgraph import SawtoothLangGraphAdapter
 
 
 # Define standard LangGraph state
