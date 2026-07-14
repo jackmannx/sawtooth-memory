@@ -19,6 +19,7 @@ def config(ollama_config: OllamaConfig) -> ContextManagerConfig:
         soft_limit_tokens=50,
         hard_limit_tokens=200,
         chunk_size=3,
+        compression_mode="always_llm",
         ollama=ollama_config,
     )
 

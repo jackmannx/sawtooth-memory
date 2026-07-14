@@ -68,6 +68,7 @@ def make_l3_config(storage: InMemorySemanticStorage, **overrides) -> ContextMana
         soft_limit_tokens=50,
         hard_limit_tokens=500,
         chunk_size=2,
+        compression_mode="always_llm",
         storage_adapter=storage,
         session_id="test-session",
         enable_l3_semantic_storage=True,

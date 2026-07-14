@@ -81,6 +81,25 @@ class TestResolveCloudApiKey:
         assert resolve_cloud_api_key(Provider.GEMINI) == "gem-test"
 
 
+class TestDTEConfigValidation:
+    def test_dte_is_default_mode(self):
+        assert ContextManagerConfig().compression_mode == "dte"
+
+    @pytest.mark.parametrize(
+        ("field", "value", "match"),
+        [
+            ("obs_crush_min_tokens", 0, "obs_crush_min_tokens"),
+            ("background_spend_ratio", 1.1, "background_spend_ratio"),
+            ("novelty_min_residual", -0.1, "novelty_min_residual"),
+            ("salience_threshold", 1.1, "salience_threshold"),
+            ("salience_max_entities", 0, "salience_max_entities"),
+        ],
+    )
+    def test_invalid_cost_controls_raise(self, field, value, match):
+        with pytest.raises(ValueError, match=match):
+            ContextManagerConfig(**{field: value})
+
+
 class TestL3ConfigValidation:
     def test_l3_requires_semantic_storage_when_enabled(self):
         from tests.l3_helpers import InMemorySemanticStorage

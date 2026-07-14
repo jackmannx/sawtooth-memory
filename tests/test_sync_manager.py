@@ -88,6 +88,7 @@ def test_sync_manager_inline_compression_on_soft_limit():
         soft_limit_tokens=10,
         hard_limit_tokens=500,
         chunk_size=1,
+        compression_mode="always_llm",
     )
 
     mock_compressor = MagicMock()
@@ -106,6 +107,11 @@ def test_sync_manager_inline_compression_on_soft_limit():
             memory.add_message("user", "This is a long enough message to trigger compression.")
             assert memory.get_stats()["compression"]["cycles"] >= 1
             assert "Compressed turn." in memory.state.l2_archival.narrative
+
+            memory.add_message(
+                "user", "A second long message must trigger another compression cycle."
+            )
+            assert memory.get_stats()["compression"]["cycles"] >= 2
 
 
 def test_for_sync_script_factory():

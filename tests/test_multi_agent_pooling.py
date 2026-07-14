@@ -88,6 +88,7 @@ async def test_multi_agent_pool_push_and_pull_sync():
             session_id="node_a_session",
             pool_id=pool_id,
             enable_deterministic_ner=False,
+            compression_mode="always_llm",
         )
         async with ContextManager(
             "You are node A.", config_a, enable_events=False
