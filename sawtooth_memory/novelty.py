@@ -40,16 +40,17 @@ def residualize(
     protected: list[str] = list(ledger.entities)
     for history in ledger.entities.values():
         protected.extend(history)
+    # Longest first so overlapping values strip correctly in one pass.
     protected.sort(key=len, reverse=True)
+    eraser = _build_eraser(protected)
 
     residual_lines: list[str] = []
     for raw_line in source.splitlines():
         line = _FOLD_HEADER.sub("", raw_line).strip()
         if not line or _normalize(line) in known_lines:
             continue
-        for value in protected:
-            if len(value) >= 2:
-                line = re.sub(re.escape(value), "", line, flags=re.IGNORECASE)
+        if eraser is not None:
+            line = eraser.sub("", line)
         line = _SPACE.sub(" ", line).strip(" ,;:-")
         if line and _normalize(line) not in known_lines:
             residual_lines.append(line)
@@ -60,6 +61,13 @@ def residualize(
         source_tokens=source_tokens,
         residual_tokens=count_text(residual),
     )
+
+
+def _build_eraser(protected: list[str]) -> re.Pattern[str] | None:
+    parts = [re.escape(value) for value in protected if len(value) >= 2]
+    if not parts:
+        return None
+    return re.compile("|".join(parts), flags=re.IGNORECASE)
 
 
 def _normalize(text: str) -> str:

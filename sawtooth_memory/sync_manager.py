@@ -22,16 +22,23 @@ from .compression_core import (
     run_compression_cycle_sync,
 )
 from .config import ContextManagerConfig, OllamaConfig
+from .dte_runtime import (
+    account_main_prompt_tokens,
+    apply_fold_delta_to_pool,
+    apply_observation_crush,
+    merge_pool_into_state,
+    pool_content_fingerprint,
+    prepare_consolidation,
+    prompt_turn_key,
+)
 from .embeddings.factory import create_embedding_provider
 from .exceptions import TokenLimitExceededError
-from .fold_unit import create_fold_unit, fold_lines, remove_fold_lines
+from .fold_unit import create_fold_unit, remove_fold_lines
 from .intent_planner import PromptIntentPlan, plan_prompt
 from .l3_indexer import SemanticIndexer
 from .middleware import _extract_entity_event
 from .monitor import TokenMonitor
 from .ner import NERPipeline, active_strategy_context
-from .novelty import residualize
-from .observation_crush import crush_observation
 from .prompt_compiler import (
     compile_prompt,
     format_l3_retrieval_block,
@@ -128,6 +135,9 @@ class SyncContextManager:
         self._compression_cycles: int = 0
         self._compression_failures: int = 0
         self._started = False
+        self._state_dirty: bool = False
+        self._prompt_turn_key: tuple | None = None
+        self._last_pool_fingerprint: str | None = None
 
     def __enter__(self) -> "SyncContextManager":
         self._load_state()
@@ -136,8 +146,21 @@ class SyncContextManager:
         return self
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        self._persist_state(force=True)
         self._compressor.close()
         self._started = False
+
+    def _mark_state_dirty(self) -> None:
+        self._state_dirty = True
+
+    def _persist_state(self, *, force: bool = False) -> None:
+        adapter = self._config.storage_adapter
+        if not adapter:
+            return
+        if not force and not self._state_dirty:
+            return
+        run_coro_once(adapter.save_state(self._config.session_id, self._state))
+        self._state_dirty = False
 
     # ------------------------------------------------------------------
     # Core API
@@ -150,27 +173,19 @@ class SyncContextManager:
                 "SyncContextManager must be used within a 'with' context."
             )
 
-        stored_content = content
-        if self._config.enable_observation_crush and role == "tool":
-            crushed = crush_observation(
-                content,
-                count_text=self._monitor.count_text,
-                min_tokens=self._config.obs_crush_min_tokens,
-            )
-            stored_content = crushed.content
-            if crushed.crushed and crushed.cache_id:
-                self._observation_cache[crushed.cache_id] = content
-                self._observation_cache.move_to_end(crushed.cache_id)
-                while (
-                    len(self._observation_cache)
-                    > self._config.obs_cache_max_entries
-                ):
-                    self._observation_cache.popitem(last=False)
-                self._state.dte.observation_tokens_saved += crushed.tokens_saved
+        stored_content = apply_observation_crush(
+            role,
+            content,
+            config=self._config,
+            count_text=self._monitor.count_text,
+            cache=self._observation_cache,
+            dte=self._state.dte,
+        )
 
         msg = Message(role=role, content=stored_content)
         msg.token_count = self._monitor.count_message(msg)
         self._state.l1_working.append(msg)
+        self._mark_state_dirty()
 
         if (
             self._config.enable_ingest_entity_scan
@@ -192,12 +207,8 @@ class SyncContextManager:
         elif self._monitor.should_trigger_compression(self._state):
             self._trigger_compression()
 
-        if self._config.storage_adapter:
-            run_coro_once(
-                self._config.storage_adapter.save_state(
-                    self._config.session_id, self._state
-                )
-            )
+        if self._config.persist_every_message:
+            self._persist_state(force=True)
 
     def retrieve_observation(self, cache_id: str) -> str | None:
         """Return a raw tool observation retained by Observation Crush."""
@@ -214,12 +225,8 @@ class SyncContextManager:
         finally:
             active_strategy_context.reset(token)
 
-        if self._config.storage_adapter:
-            run_coro_once(
-                self._config.storage_adapter.save_state(
-                    self._config.session_id, self._state
-                )
-            )
+        self._mark_state_dirty()
+        self._persist_state(force=True)
 
     def build_prompt(self, *, retrieval_query: str | None = None) -> list[dict[str, str]]:
         """Compile all memory tiers into an OpenAI-compatible messages list."""
@@ -268,10 +275,17 @@ class SyncContextManager:
             include_l2=intent_plan.include_l2,
         )
         self._last_l3_retrieval = result.l3_retrieval
-        self._state.dte.main_prompt_tokens += sum(
+        prompt_tokens = sum(
             self._monitor.count_text(message["content"]) for message in result.messages
         )
+        self._prompt_turn_key = account_main_prompt_tokens(
+            self._state.dte,
+            prompt_tokens,
+            previous_key=self._prompt_turn_key,
+            current_key=prompt_turn_key(self._state),
+        )
         self._maybe_consolidate(intent_plan)
+        self._persist_state()
         return result.messages
 
     def explain_prompt(self) -> dict[str, Any]:
@@ -490,17 +504,13 @@ class SyncContextManager:
             return
 
         pool_entities, pool_archive = pool_state
-        for key, history in pool_entities.entities.items():
-            for value in history:
-                self._state.l1_5_entities.upsert({key: value})
+        fingerprint = pool_content_fingerprint(pool_entities, pool_archive)
+        if fingerprint == self._last_pool_fingerprint:
+            return
 
-        pool_narrative = pool_archive.narrative.strip()
-        if pool_narrative:
-            local_narrative = self._state.l2_archival.narrative.strip()
-            if not local_narrative:
-                self._state.l2_archival.narrative = pool_narrative
-            elif pool_narrative not in local_narrative:
-                self._state.l2_archival.append_narrative(pool_narrative)
+        merge_pool_into_state(self._state, pool_entities, pool_archive)
+        self._last_pool_fingerprint = fingerprint
+        self._mark_state_dirty()
 
     def _sync_fold_to_pool(
         self, narrative: str, entity_keys: tuple[str, ...]
@@ -517,15 +527,19 @@ class SyncContextManager:
         else:
             shared_entities, shared_archive = pool_state
 
-        for key in entity_keys:
-            value = self._state.l1_5_entities.get_latest(key)
-            if value is not None:
-                shared_entities.upsert({key: value})
-        shared_archive.append_narrative(
-            f"[origin:{self._config.session_id}] {narrative}"
+        apply_fold_delta_to_pool(
+            session_id=self._config.session_id,
+            fold_stub=narrative,
+            entity_keys=entity_keys,
+            local_entities=self._state.l1_5_entities,
+            shared_entities=shared_entities,
+            shared_archive=shared_archive,
         )
         run_coro_once(
             adapter.save_pool_state(pool_id, shared_entities, shared_archive)
+        )
+        self._last_pool_fingerprint = pool_content_fingerprint(
+            shared_entities, shared_archive
         )
 
     def _compact_pool_folds(self) -> None:
@@ -558,6 +572,7 @@ class SyncContextManager:
             self._state.l1_5_entities.upsert(extraction.entities)
         finally:
             active_strategy_context.reset(token)
+        self._mark_state_dirty()
 
     def _index_l3(self, state: MemoryState, messages_text: str, cycle_id: str) -> int:
         if not self._l3_indexer or not messages_text.strip():
@@ -574,88 +589,42 @@ class SyncContextManager:
             )
             return 0
 
-        if chunks and self._config.storage_adapter:
-            try:
-                run_coro_once(
-                    self._config.storage_adapter.save_state(
-                        self._config.session_id, state
+        if chunks:
+            self._mark_state_dirty()
+            if self._config.storage_adapter:
+                try:
+                    self._persist_state(force=True)
+                except Exception as exc:
+                    logger.warning(
+                        "SyncContextManager: failed to persist L3 metadata (%s).",
+                        exc,
+                        exc_info=True,
                     )
-                )
-            except Exception as exc:
-                logger.warning(
-                    "SyncContextManager: failed to persist L3 metadata (%s).",
-                    exc,
-                    exc_info=True,
-                )
         return chunks
 
     def _maybe_consolidate(self, intent_plan: PromptIntentPlan) -> None:
-        if (
-            self._config.compression_mode != "dte"
-            or not self._config.consolidation_on_idle
-            or not self._config.enable_sync_consolidation
-            or self._state.dte.consolidation_queued
-        ):
-            return
-
-        debt = self._state.dte.narrative_debt_tokens
-        if debt <= 0 or (
-            debt < self._config.narrative_debt_trigger_tokens
-            and not intent_plan.prefers_narrative
-        ):
-            return
-
-        folds = fold_lines(self._state.l2_archival.narrative)
-        if not folds:
-            self._state.dte.narrative_debt_tokens = 0
-            return
-
-        source = "\n".join(folds)
-        residual = source
-        if self._config.enable_novelty_filter:
-            novelty = residualize(
-                source,
-                self._state.l1_5_entities,
-                self._state.l2_archival.narrative,
-                count_text=self._monitor.count_text,
-            )
-            residual = novelty.residual
-            if (
-                not residual
-                or novelty.residual_ratio < self._config.novelty_min_residual
-            ):
-                self._state.l2_archival.narrative = remove_fold_lines(
-                    self._state.l2_archival.narrative
-                )
-                self._state.dte.narrative_debt_tokens = 0
-                self._state.dte.folds_since_narrative = 0
-                self._state.dte.novelty_skips += 1
-                return
-
-        guideline = self._config.compression_guideline or (
-            "Consolidate these structured fold outcomes into one dense, "
-            "causal narrative. Do not repeat exact identifiers already protected "
-            "by the entity ledger."
+        prep = prepare_consolidation(
+            self._state,
+            self._config,
+            intent_plan,
+            count_text=self._monitor.count_text,
+            count_message=self._monitor.count_message,
+            require_sync_flag=True,
         )
-        content = f"{guideline}\n\n{residual}"
-        message = Message(role="system", content=content)
-        message.token_count = self._monitor.count_message(message)
-
-        allowance = int(
-            self._state.dte.main_prompt_tokens
-            * self._config.background_spend_ratio
-        )
-        projected = (
-            self._state.dte.background_llm_input_tokens + message.token_count
-        )
-        if projected > allowance:
+        if prep is None:
+            return
+        if prep.novelty_skipped:
+            self._mark_state_dirty()
+            return
+        if prep.message is None:
             return
 
         self._state.dte.consolidation_queued = True
+        self._mark_state_dirty()
         try:
             outcome = run_compression_cycle_sync(
                 CompressionCycleInput(
-                    messages=[message],
+                    messages=[prep.message],
                     state=self._state,
                     cycle_id=f"consolidate-{uuid.uuid4()}",
                 ),
@@ -663,7 +632,7 @@ class SyncContextManager:
                 self._engine,
                 run_async=run_coro_once,
             )
-            self._state.dte.background_llm_input_tokens += message.token_count
+            self._state.dte.background_llm_input_tokens += prep.message.token_count
             if outcome.success:
                 self._state.l2_archival.narrative = remove_fold_lines(
                     self._state.l2_archival.narrative
@@ -673,6 +642,7 @@ class SyncContextManager:
                 self._state.dte.folds_since_narrative = 0
                 self._state.dte.consolidation_cycles += 1
                 self._compression_cycles += 1
+                self._mark_state_dirty()
             else:
                 self._state.l2_archival.narrative = "\n".join(
                     line
@@ -692,16 +662,20 @@ class SyncContextManager:
         cycle_id = str(uuid.uuid4())
         if self._config.compression_mode == "dte":
             messages_text = messages_to_text(chunk)
-            l3_chunks = self._index_l3(self._state, messages_text, cycle_id)
+            # Fold first so L1 shrinks immediately; then index L3 / sync pool.
             fold = create_fold_unit(
                 chunk,
                 self._state,
                 self._ner_pipeline,
                 cycle_id=cycle_id,
-                l3_chunks=l3_chunks,
+                l3_chunks=0,
                 enable_ner=self._config.enable_deterministic_ner,
+                messages_text=messages_text,
+                mark_l3_recoverable=self._l3_indexer is not None,
             )
+            self._index_l3(self._state, messages_text, cycle_id)
             self._sync_fold_to_pool(fold.stub, fold.entity_keys)
+            self._mark_state_dirty()
             self._monitor.release_compression_lock()
             logger.info(
                 "SyncContextManager: DTE-folded %d messages (cycle=%s).",
@@ -725,6 +699,7 @@ class SyncContextManager:
             self._compression_cycles += 1
             if not outcome.success:
                 self._compression_failures += 1
+            self._mark_state_dirty()
 
             logger.info(
                 "SyncContextManager: inline compression completed for %d messages "
@@ -741,15 +716,31 @@ class SyncContextManager:
         if not chunk:
             return
 
-        if self._l3_indexer:
+        cycle_id = f"hard-truncate-{uuid.uuid4()}"
+        if self._config.compression_mode == "dte":
             messages_text = messages_to_text(chunk)
-            cycle_id = f"hard-truncate-{uuid.uuid4()}"
+            fold = create_fold_unit(
+                chunk,
+                self._state,
+                self._ner_pipeline,
+                cycle_id=cycle_id,
+                l3_chunks=0,
+                enable_ner=self._config.enable_deterministic_ner,
+                messages_text=messages_text,
+                mark_l3_recoverable=self._l3_indexer is not None,
+            )
             self._index_l3(self._state, messages_text, cycle_id)
+            self._sync_fold_to_pool(fold.stub, fold.entity_keys)
+        else:
+            if self._l3_indexer:
+                messages_text = messages_to_text(chunk)
+                self._index_l3(self._state, messages_text, cycle_id)
+            note = (
+                f"[HARD TRUNCATION: {len(chunk)} messages dropped because the "
+                f"inline compression path has not yet caught up.]"
+            )
+            self._state.l2_archival.append_narrative(note)
 
-        note = (
-            f"[HARD TRUNCATION: {len(chunk)} messages dropped because the "
-            f"inline compression path has not yet caught up.]"
-        )
-        self._state.l2_archival.append_narrative(note)
+        self._mark_state_dirty()
         logger.warning("Hard truncation: dropped %d messages from L1.", len(chunk))
         self._monitor.release_compression_lock()

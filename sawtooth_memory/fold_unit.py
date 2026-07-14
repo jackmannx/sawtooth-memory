@@ -30,13 +30,19 @@ def create_fold_unit(
     cycle_id: str,
     l3_chunks: int = 0,
     enable_ner: bool = True,
+    messages_text: str | None = None,
+    mark_l3_recoverable: bool = False,
 ) -> FoldUnit:
-    """Externalize an evicted trajectory into L1.5, L2 and DTE accounting."""
-    messages_text = messages_to_text(messages)
+    """Externalize an evicted trajectory into L1.5, L2 and DTE accounting.
+
+    When *mark_l3_recoverable* is True, the stub records ``l3=<cycle_id>`` even
+    if indexing has not completed yet (async finalize path).
+    """
+    text = messages_text if messages_text is not None else messages_to_text(messages)
     entity_keys: tuple[str, ...] = ()
 
     if enable_ner:
-        extraction = ner_pipeline.extract_with_metadata(messages_text)
+        extraction = ner_pipeline.extract_with_metadata(text)
         entity_keys = tuple(sorted(extraction.entities))
         if extraction.entities:
             token = active_strategy_context.set(extraction.strategies)
@@ -48,7 +54,11 @@ def create_fold_unit(
     tokens_evicted = sum(message.token_count for message in messages)
     outcome = _extract_outcome_stub(messages)
     entities = ",".join(entity_keys[:8]) or "none"
-    l3_ref = cycle_id if l3_chunks else "unavailable"
+    l3_ref = (
+        cycle_id
+        if l3_chunks > 0 or mark_l3_recoverable
+        else "unavailable"
+    )
     stub = (
         f"[FOLD n={len(messages)} tokens={tokens_evicted} "
         f"entities={entities} l3={l3_ref}] {outcome}"
@@ -61,7 +71,7 @@ def create_fold_unit(
     return FoldUnit(
         cycle_id=cycle_id,
         stub=stub,
-        messages_text=messages_text,
+        messages_text=text,
         tokens_evicted=tokens_evicted,
         entity_keys=entity_keys,
         l3_chunks=l3_chunks,

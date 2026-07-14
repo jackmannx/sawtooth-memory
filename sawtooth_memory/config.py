@@ -179,6 +179,13 @@ class ContextManagerConfig(BaseModel):
         default=None,
         description="Optional ACON-style instruction prepended to consolidation input.",
     )
+    persist_every_message: bool = Field(
+        default=False,
+        description=(
+            "Persist MemoryState after every add_message. When False (default), "
+            "flush on build_prompt, compaction, pin_entity, and manager shutdown."
+        ),
+    )
 
     # NEW: Highly descriptive architectural configuration
     background_model: Optional[str] = Field(
@@ -238,7 +245,7 @@ class ContextManagerConfig(BaseModel):
         description="Namespace mapping for multi-agent pool synchronization.",
     )
 
-    # L3 semantic vector archival (storage layer; retrieval not in build_prompt)
+    # L3 semantic vector archival (optional retrieval injected by build_prompt)
     enable_l3_semantic_storage: bool = Field(
         default=False,
         description=(
