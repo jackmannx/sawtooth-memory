@@ -13,7 +13,13 @@ from sawtooth_memory.intent_planner import plan_prompt
 from sawtooth_memory.middleware import ContextManager
 from sawtooth_memory.novelty import residualize
 from sawtooth_memory.observation_crush import crush_observation
-from sawtooth_memory.state import EntityLedger, MemoryState, Message, SystemPrompt, WorkingMemory
+from sawtooth_memory.state import (
+    EntityLedger,
+    MemoryState,
+    Message,
+    SystemPrompt,
+    WorkingMemory,
+)
 
 
 @pytest.mark.asyncio
