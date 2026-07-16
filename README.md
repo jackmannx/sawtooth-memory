@@ -486,13 +486,13 @@ if __name__ == "__main__":
 - [x] Sync-native `SyncContextManager` + formal sync host guidance
 - [x] Expanded package-root public exports (storage, events, embeddings, sync wrapper)
 - [x] Detailed API Reference + deeper examples (pool, Postgres/L3, cloud, sync portal)
-- [ ] Release polish: CHANGELOG/tag alignment toward next PyPI cut
+- [x] Release polish: CHANGELOG/tag alignment, `STABILITY.md`, PyPI release workflow
 
 ---
 
 ## Contributing
 
-We welcome pull requests. See our [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on how to run the test suite and ensure code quality.
+We welcome pull requests. See our [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on how to run the test suite and ensure code quality. Stable API guarantees are documented in [STABILITY.md](STABILITY.md).
 
 ---
 
