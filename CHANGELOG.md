@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+## [0.3.0] - 2026-07-16
 ### Added
 - Expanded package-root public API: `SawtoothSyncWrapper`, `CloudConfig`, `Provider`, storage adapters, event bus symbols, and embedding helpers.
 - Formal sync-environment guidance (`SyncContextManager` vs `SawtoothSyncWrapper` vs `ContextManager`) with method parity on the sync portal (`pin_entity`, `retrieve_observation`, `.state`).
@@ -18,11 +20,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Strategy provenance telemetry: `salience_heuristic` and `pinned` extraction sources.
 - Dual-Target Externalization (DTE) default compression mode with observation crush and fold units.
 - Sync-native `SyncContextManager` with inline compression for scripts and WSGI hosts.
+- `STABILITY.md` API contract and deprecation policy.
+- Release workflow (PyPI publish on version tags) and Python 3.11–3.13 CI matrix.
 
 ### Changed
+- **Default compression mode is now `dte`.** Set `compression_mode="always_llm"` for pre-0.3.0 eager summarization behavior.
 - L3 module docs now reflect `build_prompt()` retrieval injection.
 - Event bus documentation corrected to use string event types + `get_event_bus()`.
-- `SECURITY.md` support table covers current 0.2.x releases.
+- `SECURITY.md` support table covers current 0.3.x releases.
+
+### Migration
+- Existing integrations require no code changes unless you relied on implicit LLM-on-soft-limit behavior.
+- To restore legacy eager summarization: `ContextManagerConfig(compression_mode="always_llm", ...)`.
+- Prefer `from sawtooth_memory import ...` over deep submodule imports for stable API access.
 
 ## [0.2.2] - 2026-07-11
 ### Added

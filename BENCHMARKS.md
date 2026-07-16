@@ -51,7 +51,7 @@ background-compressor input tokens; reporting only one hides cost shifting.
 
 **Run date:** 2026-07-11  
 **Git SHA:** `5b31fa0`  
-**Package version:** `0.2.1`
+**Package version:** `0.3.0`
 
 ### Test Environment
 
