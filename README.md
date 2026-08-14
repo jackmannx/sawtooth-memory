@@ -7,6 +7,16 @@
 
 **A high-performance, asynchronous non-blocking hierarchical memory framework for LLM Agents.**
 
+> **See it for yourself in under a minute — no API key required:**
+> ```bash
+> pip install -e ".[dev]"
+> python examples/flagship_demo/run_demo.py
+> ```
+> Replays a 40-turn coding-agent session through a naive FIFO-truncated memory and through
+> Sawtooth side by side. The naive memory loses planted facts (a prod DB connection ID, an
+> incident ticket) once they age out of the window; Sawtooth keeps them exact via its entity
+> ledger — with zero LLM calls. See [`examples/flagship_demo/`](examples/flagship_demo/).
+
 ## The Problem
 
 Standard LLM memory systems (like LangChain's `ConversationSummaryMemory`) process conversation history sequentially on the main application thread. Every time a user sends a message, the entire application freezes while the system waits for an LLM to generate a new historical summary. Furthermore, these summaries suffer from the "Lost in the Middle" hallucination effect, frequently deleting specific UUIDs, names, or rules to save tokens.
@@ -157,7 +167,7 @@ with SyncContextManager("You are a helpful assistant.", config=config) as memory
     print(prompt)
 ```
 
-See [`examples/simple_sync_script.py`](examples/simple_sync_script.py) for a full runnable example. Additional deep-dives live under [`examples/`](examples/) (sync portal, cloud backend, multi-agent pool, Postgres+L3).
+See [`examples/simple_sync_script.py`](examples/simple_sync_script.py) for a full runnable example. For a before/after comparison against naive memory, see [`examples/flagship_demo/`](examples/flagship_demo/). Additional deep-dives live under [`examples/`](examples/) (sync portal, cloud backend, multi-agent pool, Postgres+L3).
 
 | API | When to use | Compression behavior |
 | --- | --- | --- |
