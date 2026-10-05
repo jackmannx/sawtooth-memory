@@ -6,7 +6,7 @@ with near-zero latency.
 """
 
 import json
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 try:
     import redis.asyncio as redis
@@ -138,6 +138,66 @@ class RedisStorageAdapter(BaseStorageAdapter):
             await self._client.setex(key, self.ttl_seconds, json_payload)
         else:
             await self._client.set(key, json_payload)
+
+    async def merge_pool_state(
+        self,
+        pool_id: str,
+        merge_fn: Callable[[EntityLedger, ArchivalMemory], None],
+        *,
+        max_retries: int = 10,
+    ) -> tuple[EntityLedger, ArchivalMemory]:
+        """
+        Atomically load, merge, and persist shared pool state.
+
+        Redis has no row-lock equivalent, so this uses optimistic locking via
+        WATCH/MULTI/EXEC: if another writer touches the key between our read
+        and our write, EXEC aborts and we retry with a fresh read. This
+        closes the same clobbering window that a plain load-then-save
+        (``load_pool_state`` + ``save_pool_state`` called separately) leaves
+        open for concurrent agents sharing a pool.
+        """
+        key = self._get_pool_key(pool_id)
+
+        for _ in range(max_retries):
+            async with self._client.pipeline(transaction=True) as pipe:
+                await pipe.watch(key)
+                raw_data = await pipe.get(key)
+
+                if raw_data:
+                    payload: dict[str, Any] = json.loads(raw_data)
+                    entities = EntityLedger.model_validate(
+                        payload.get("l1_5_entities", {})
+                    )
+                    archive = ArchivalMemory.model_validate(
+                        payload.get("l2_archival", {})
+                    )
+                else:
+                    entities, archive = EntityLedger(), ArchivalMemory()
+
+                merge_fn(entities, archive)
+
+                new_payload = json.dumps(
+                    {
+                        "l1_5_entities": entities.model_dump(mode="json"),
+                        "l2_archival": archive.model_dump(mode="json"),
+                    }
+                )
+
+                pipe.multi()
+                if self.ttl_seconds:
+                    pipe.setex(key, self.ttl_seconds, new_payload)
+                else:
+                    pipe.set(key, new_payload)
+                try:
+                    await pipe.execute()
+                    return entities, archive
+                except redis.WatchError:
+                    continue
+
+        raise RuntimeError(
+            f"RedisStorageAdapter: merge_pool_state for pool_id={pool_id!r} "
+            f"failed after {max_retries} retries due to sustained contention."
+        )
 
     async def close(self) -> None:
         """Gracefully close the connection pool."""

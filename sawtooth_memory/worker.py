@@ -224,17 +224,16 @@ class CompressionWorker:
                 )
                 if self._storage_adapter and self._pool_id:
                     try:
-                        pool_state = await self._storage_adapter.load_pool_state(
-                            self._pool_id
-                        )
-                        if pool_state is not None:
-                            shared_entities, shared_archive = pool_state
+                        def _compact(
+                            shared_entities: EntityLedger, shared_archive: ArchivalMemory
+                        ) -> None:
                             shared_archive.narrative = remove_fold_lines(
                                 shared_archive.narrative
                             )
-                            await self._storage_adapter.save_pool_state(
-                                self._pool_id, shared_entities, shared_archive
-                            )
+
+                        await self._storage_adapter.merge_pool_state(
+                            self._pool_id, _compact
+                        )
                     except Exception as exc:
                         logger.warning(
                             "CompressionWorker: failed to compact shared fold "
@@ -342,23 +341,19 @@ class CompressionWorker:
 
         if self._storage_adapter and self._pool_id and task.fold_stub:
             try:
-                pool_state = await self._storage_adapter.load_pool_state(self._pool_id)
-                if pool_state is None:
-                    shared_entities = EntityLedger()
-                    shared_archive = ArchivalMemory()
-                else:
-                    shared_entities, shared_archive = pool_state
-                apply_fold_delta_to_pool(
-                    session_id=self._session_id,
-                    fold_stub=task.fold_stub,
-                    entity_keys=task.entity_keys,
-                    local_entities=task.state.l1_5_entities,
-                    shared_entities=shared_entities,
-                    shared_archive=shared_archive,
-                )
-                await self._storage_adapter.save_pool_state(
-                    self._pool_id, shared_entities, shared_archive
-                )
+                def _merge(
+                    shared_entities: EntityLedger, shared_archive: ArchivalMemory
+                ) -> None:
+                    apply_fold_delta_to_pool(
+                        session_id=self._session_id,
+                        fold_stub=task.fold_stub,
+                        entity_keys=task.entity_keys,
+                        local_entities=task.state.l1_5_entities,
+                        shared_entities=shared_entities,
+                        shared_archive=shared_archive,
+                    )
+
+                await self._storage_adapter.merge_pool_state(self._pool_id, _merge)
             except Exception as exc:
                 logger.warning(
                     "CompressionWorker: fold pool sync failed (%s).",

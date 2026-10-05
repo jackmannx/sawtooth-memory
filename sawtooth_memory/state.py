@@ -35,6 +35,11 @@ class Message(BaseModel):
     content: str
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     token_count: int = 0
+    # Entity keys found by the ingest-time scan on this message's original
+    # (pre-crush) content. Folding re-runs NER on the *stored* content, which
+    # is blind to anything Observation Crush already replaced -- this lets
+    # create_fold_unit() still credit those entities for pool propagation.
+    ingested_entity_keys: list[str] = Field(default_factory=list)
 
     def to_openai_dict(self) -> dict[str, str]:
         return {"role": self.role, "content": self.content}

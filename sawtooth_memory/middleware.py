@@ -354,7 +354,7 @@ class ContextManager:
             self._config.enable_ingest_entity_scan
             and self._config.enable_deterministic_ner
         ):
-            await self._scan_message_entities(content)
+            await self._scan_message_entities(content, msg)
 
         logger.debug(
             f"add_message: role={role}, tokens={msg.token_count}, "
@@ -407,13 +407,15 @@ class ContextManager:
         self._mark_state_dirty()
         await self._persist_state(force=True)
 
-    async def _scan_message_entities(self, content: str) -> None:
+    async def _scan_message_entities(self, content: str, msg: Message) -> None:
         """Lightweight ingest-time entity scan for the live L1 window."""
         from .ner import active_strategy_context
 
         extraction = self._worker.ner_pipeline.extract_with_metadata(content)
         if not extraction.entities:
             return
+
+        msg.ingested_entity_keys = list(extraction.entities)
 
         token = active_strategy_context.set(extraction.strategies)
         try:
@@ -450,22 +452,19 @@ class ContextManager:
         if not adapter or not pool_id:
             return
 
-        pool_state = await adapter.load_pool_state(pool_id)
-        if pool_state is None:
-            shared_entities = EntityLedger()
-            shared_archive = ArchivalMemory()
-        else:
-            shared_entities, shared_archive = pool_state
+        def _merge(shared_entities: EntityLedger, shared_archive: ArchivalMemory) -> None:
+            apply_fold_delta_to_pool(
+                session_id=self._config.session_id,
+                fold_stub=narrative,
+                entity_keys=entity_keys,
+                local_entities=self._state.l1_5_entities,
+                shared_entities=shared_entities,
+                shared_archive=shared_archive,
+            )
 
-        apply_fold_delta_to_pool(
-            session_id=self._config.session_id,
-            fold_stub=narrative,
-            entity_keys=entity_keys,
-            local_entities=self._state.l1_5_entities,
-            shared_entities=shared_entities,
-            shared_archive=shared_archive,
+        shared_entities, shared_archive = await adapter.merge_pool_state(
+            pool_id, _merge
         )
-        await adapter.save_pool_state(pool_id, shared_entities, shared_archive)
         self._last_pool_fingerprint = pool_content_fingerprint(
             shared_entities, shared_archive
         )
