@@ -201,7 +201,7 @@ class SyncContextManager:
             self._config.enable_ingest_entity_scan
             and self._config.enable_deterministic_ner
         ):
-            self._scan_message_entities(content)
+            self._scan_message_entities(content, msg)
 
         if self._monitor.exceeds_hard_limit(self._state):
             if not self._config.fallback_truncate:
@@ -530,23 +530,18 @@ class SyncContextManager:
         if not adapter or not pool_id:
             return
 
-        pool_state = run_coro_once(adapter.load_pool_state(pool_id))
-        if pool_state is None:
-            shared_entities = EntityLedger()
-            shared_archive = ArchivalMemory()
-        else:
-            shared_entities, shared_archive = pool_state
+        def _merge(shared_entities: EntityLedger, shared_archive: ArchivalMemory) -> None:
+            apply_fold_delta_to_pool(
+                session_id=self._config.session_id,
+                fold_stub=narrative,
+                entity_keys=entity_keys,
+                local_entities=self._state.l1_5_entities,
+                shared_entities=shared_entities,
+                shared_archive=shared_archive,
+            )
 
-        apply_fold_delta_to_pool(
-            session_id=self._config.session_id,
-            fold_stub=narrative,
-            entity_keys=entity_keys,
-            local_entities=self._state.l1_5_entities,
-            shared_entities=shared_entities,
-            shared_archive=shared_archive,
-        )
-        run_coro_once(
-            adapter.save_pool_state(pool_id, shared_entities, shared_archive)
+        shared_entities, shared_archive = run_coro_once(
+            adapter.merge_pool_state(pool_id, _merge)
         )
         self._last_pool_fingerprint = pool_content_fingerprint(
             shared_entities, shared_archive
@@ -558,14 +553,12 @@ class SyncContextManager:
         if not adapter or not pool_id:
             return
         try:
-            pool_state = run_coro_once(adapter.load_pool_state(pool_id))
-            if pool_state is None:
-                return
-            shared_entities, shared_archive = pool_state
-            shared_archive.narrative = remove_fold_lines(shared_archive.narrative)
-            run_coro_once(
-                adapter.save_pool_state(pool_id, shared_entities, shared_archive)
-            )
+            def _compact(
+                shared_entities: EntityLedger, shared_archive: ArchivalMemory
+            ) -> None:
+                shared_archive.narrative = remove_fold_lines(shared_archive.narrative)
+
+            run_coro_once(adapter.merge_pool_state(pool_id, _compact))
         except Exception as exc:
             logger.warning(
                 "SyncContextManager: failed to compact shared fold records (%s).",
@@ -573,10 +566,11 @@ class SyncContextManager:
                 exc_info=True,
             )
 
-    def _scan_message_entities(self, content: str) -> None:
+    def _scan_message_entities(self, content: str, msg: Message) -> None:
         extraction = self._ner_pipeline.extract_with_metadata(content)
         if not extraction.entities:
             return
+        msg.ingested_entity_keys = list(extraction.entities)
         token = active_strategy_context.set(extraction.strategies)
         try:
             self._state.l1_5_entities.upsert(extraction.entities)

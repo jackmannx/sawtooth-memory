@@ -39,17 +39,27 @@ def create_fold_unit(
     if indexing has not completed yet (async finalize path).
     """
     text = messages_text if messages_text is not None else messages_to_text(messages)
-    entity_keys: tuple[str, ...] = ()
+    entity_key_set: set[str] = set()
 
     if enable_ner:
         extraction = ner_pipeline.extract_with_metadata(text)
-        entity_keys = tuple(sorted(extraction.entities))
+        entity_key_set.update(extraction.entities)
         if extraction.entities:
             token = active_strategy_context.set(extraction.strategies)
             try:
                 state.l1_5_entities.upsert(extraction.entities)
             finally:
                 active_strategy_context.reset(token)
+
+    # NER above runs over the *stored* message text, which is blind to
+    # anything Observation Crush already replaced with a placeholder. Union
+    # in entities the ingest-time scan already found on the original content
+    # so crushed-observation entities still get credited for pool propagation
+    # (apply_fold_delta_to_pool only shares keys listed here).
+    for message in messages:
+        entity_key_set.update(message.ingested_entity_keys)
+
+    entity_keys: tuple[str, ...] = tuple(sorted(entity_key_set))
 
     tokens_evicted = sum(message.token_count for message in messages)
     outcome = _extract_outcome_stub(messages)

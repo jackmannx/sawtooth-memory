@@ -7,7 +7,7 @@ for safe concurrent access across distributed stateless containers.
 
 from __future__ import annotations
 
-from typing import Any, List, Sequence, Tuple
+from typing import Any, Callable, List, Sequence, Tuple
 
 from ..state import ArchivalMemory, EntityLedger, MemoryState
 from .base import BaseStorageAdapter
@@ -231,6 +231,61 @@ class PostgresStorageAdapter(BaseStorageAdapter, SemanticStorageAdapter):
                     entities_payload,
                     archive_payload,
                 )
+
+    async def merge_pool_state(
+        self,
+        pool_id: str,
+        merge_fn: Callable[[EntityLedger, ArchivalMemory], None],
+    ) -> tuple[EntityLedger, ArchivalMemory]:
+        """
+        Atomically load, merge, and persist shared pool state.
+
+        Holds the ``FOR UPDATE`` row lock for the *entire* read-modify-write
+        sequence (unlike ``save_pool_state``, which only locks around the
+        final write) so two agents syncing the same pool concurrently cannot
+        read each other's stale snapshot and clobber one another's deltas on
+        save. The row-ensuring insert runs first so the lock has a row to
+        lock even on the very first write to a given pool_id.
+        """
+        pool = await self._ensure_pool()
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    """
+                    INSERT INTO sawtooth_pools (
+                        pool_id, entities_payload, archive_payload, updated_at
+                    )
+                    VALUES ($1, '{}'::jsonb, '{}'::jsonb, NOW())
+                    ON CONFLICT (pool_id) DO NOTHING
+                    """,
+                    pool_id,
+                )
+                row = await conn.fetchrow(
+                    """
+                    SELECT entities_payload, archive_payload
+                    FROM sawtooth_pools
+                    WHERE pool_id = $1 FOR UPDATE
+                    """,
+                    pool_id,
+                )
+                entities = EntityLedger.model_validate(row["entities_payload"])
+                archive = ArchivalMemory.model_validate(row["archive_payload"])
+
+                merge_fn(entities, archive)
+
+                await conn.execute(
+                    """
+                    UPDATE sawtooth_pools
+                    SET entities_payload = $2::jsonb,
+                        archive_payload = $3::jsonb,
+                        updated_at = NOW()
+                    WHERE pool_id = $1
+                    """,
+                    pool_id,
+                    entities.model_dump(mode="json"),
+                    archive.model_dump(mode="json"),
+                )
+        return entities, archive
 
     async def upsert_vector_chunks_batch(
         self,
